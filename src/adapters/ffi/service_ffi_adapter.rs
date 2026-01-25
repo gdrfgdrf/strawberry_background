@@ -1,6 +1,6 @@
 use crate::adapters::ffi::errors::FfiAdapterError;
 use crate::adapters::ffi::http::models::{FfiHttpEndpoint, FfiHttpResponse};
-use crate::service_runtime::service_runtime::ServiceRuntime;
+use crate::service::service_runtime::ServiceRuntime;
 use std::sync::Arc;
 use flutter_rust_bridge::frb;
 

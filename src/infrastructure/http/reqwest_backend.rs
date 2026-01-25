@@ -1,6 +1,6 @@
 use crate::domain::models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse};
 use crate::domain::traits::{DecryptionProvider, EncryptionProvider, HttpClient};
-use crate::service_runtime::config::HttpConfig;
+use crate::service::config::HttpConfig;
 use async_trait::async_trait;
 use reqwest::{Client, ClientBuilder, Method};
 use std::time::Duration;
