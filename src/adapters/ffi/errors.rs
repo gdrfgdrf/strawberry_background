@@ -1,0 +1,31 @@
+use crate::domain::models::HttpClientError;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FfiAdapterError {
+    #[error("Parameter error: {0}")]
+    InvalidParameter(String),
+    #[error("Domain error: {0}")]
+    DomainError(String),
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+    #[error("Configuration error: {0}")]
+    Configuration(String),
+}
+
+impl FfiAdapterError {
+    pub fn from_domain_error(err: HttpClientError) -> Self {
+        match err {
+            HttpClientError::Network(msg) => {
+                FfiAdapterError::DomainError(format!("Network: {}", msg))
+            }
+            HttpClientError::Timeout(dur) => {
+                FfiAdapterError::DomainError(format!("Timeout after {:?}", dur))
+            }
+            HttpClientError::InvalidUrl(url) => {
+                FfiAdapterError::DomainError(format!("Invalid URL: {}", url))
+            }
+            HttpClientError::Serialization(msg) => FfiAdapterError::Serialization(msg),
+            HttpClientError::Configuration(msg) => FfiAdapterError::Configuration(msg),
+        }
+    }
+}
