@@ -1,13 +1,19 @@
-use crate::domain::models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse};
-use crate::domain::traits::{DecryptionProvider, EncryptionProvider, HttpClient};
-use crate::service::config::HttpConfig;
+use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse};
+use crate::domain::traits::cookie_traits::CookieStore;
+use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
+use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
+use crate::service::config::{CookieConfig, HttpConfig};
 use async_trait::async_trait;
-use reqwest::{Client, ClientBuilder, Method};
+use reqwest::{Client, Method, Url};
+use std::sync::Arc;
 use std::time::Duration;
+use crate::domain::models::cookie_models::{Cookie, SameSite};
 
 pub struct ReqwestBackend {
-    encryption_provider: Option<Box<dyn EncryptionProvider>>,
-    decryption_provider: Option<Box<dyn DecryptionProvider>>,
+    encryption_provider: Option<Arc<dyn EncryptionProvider>>,
+    decryption_provider: Option<Arc<dyn DecryptionProvider>>,
+    cookie_store: Option<Arc<dyn CookieStore>>,
+    auto_save_handle: Option<tokio::task::JoinHandle<()>>,
     client: Client,
 }
 
@@ -22,12 +28,16 @@ impl ReqwestBackend {
         Ok(Self {
             encryption_provider: None,
             decryption_provider: None,
+            cookie_store: None,
+            auto_save_handle: None,
             client,
         })
     }
 
-    pub fn with_config(
+    pub fn with_parameters(
         config: HttpConfig,
+        cookie_store: Option<Arc<dyn CookieStore>>,
+        auto_save_handle: Option<tokio::task::JoinHandle<()>>
     ) -> Result<Self, HttpClientError> {
         let client = Client::builder()
             .pool_idle_timeout(config.pool_idle_timeout)
@@ -36,9 +46,12 @@ impl ReqwestBackend {
             .pool_max_idle_per_host(config.max_connections_per_host)
             .build()
             .map_err(|e| HttpClientError::Network(e.to_string()))?;
+
         Ok(Self {
             encryption_provider: config.encryption_provider,
             decryption_provider: config.decryption_provider,
+            cookie_store,
+            auto_save_handle,
             client,
         })
     }
@@ -53,21 +66,98 @@ impl ReqwestBackend {
     }
 }
 
+impl ReqwestBackend {
+    async fn inject_cookies(
+        &self,
+        url: &str,
+        request_builder: reqwest::RequestBuilder,
+        cookie_store: &Arc<dyn CookieStore>,
+    ) -> Result<reqwest::RequestBuilder, HttpClientError> {
+        let cookies = cookie_store.get_for_url(url).await;
+        if cookies.is_empty() {
+            return Ok(request_builder);
+        }
+
+        let cookie_header: String = cookies
+            .iter()
+            .map(|c| format!("{}={}", c.key.name, c.value))
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        Ok(request_builder.header(
+            reqwest::header::COOKIE,
+            reqwest::header::HeaderValue::from_str(&cookie_header)
+                .map_err(|e| HttpClientError::InvalidHeader(e.to_string()))?,
+        ))
+    }
+
+    async fn extract_cookies(
+        &self,
+        response: &reqwest::Response,
+        cookie_store: &Arc<dyn CookieStore>,
+    ) -> Result<(), HttpClientError> {
+        if let Some(url) = response.url().host_str() {
+            for cookie in response.cookies() {
+                let name = cookie.name();
+                let value = cookie.value();
+                
+                let first_same_site = match cookie.same_site_lax() {
+                    true => {
+                        SameSite::Lax
+                    }
+                    false => {
+                        SameSite::Strict
+                    }
+                };
+                let second_same_site = match cookie.same_site_strict() {
+                    true => {
+                        SameSite::Strict
+                    }
+                    false => {
+                        SameSite::Lax
+                    }
+                };
+
+                let same_site = if (first_same_site != second_same_site) {
+                    None
+                } else {
+                    Some(first_same_site)
+                };
+                
+                let cookie = Cookie::new(
+                    url.to_string(),
+                    response.url().path().to_string(),
+                    name.to_string(),
+                    value.to_string(),
+                    cookie.expires(),
+                    cookie.secure(),
+                    cookie.http_only(),
+                    same_site,
+                );
+
+                cookie_store.set(cookie).await;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl HttpClient for ReqwestBackend {
-    fn set_encryption_provider(&mut self, encryption_provider: Box<dyn EncryptionProvider>) {
+    fn set_encryption_provider(&mut self, encryption_provider: Arc<dyn EncryptionProvider>) {
         self.encryption_provider = Some(encryption_provider);
     }
 
-    fn set_decryption_provider(&mut self, decryption_provider: Box<dyn DecryptionProvider>) {
+    fn set_decryption_provider(&mut self, decryption_provider: Arc<dyn DecryptionProvider>) {
         self.decryption_provider = Some(decryption_provider);
     }
 
-    fn remove_encryption_provider(&mut self) -> Option<Box<dyn EncryptionProvider>> {
+    fn remove_encryption_provider(&mut self) -> Option<Arc<dyn EncryptionProvider>> {
         self.encryption_provider.take()
     }
 
-    fn remove_decryption_provider(&mut self) -> Option<Box<dyn DecryptionProvider>> {
+    fn remove_decryption_provider(&mut self) -> Option<Arc<dyn DecryptionProvider>> {
         self.decryption_provider.take()
     }
 
@@ -90,7 +180,10 @@ impl HttpClient for ReqwestBackend {
         }
 
         let method = Self::convert_method(&endpoint.method);
-        let mut request_builder = self.client.request(method, &endpoint.build_url());
+        let url = endpoint.build_url();
+        let parsed_url =
+            Url::parse(&url).map_err(|e| HttpClientError::InvalidUrl(e.to_string()))?;
+        let mut request_builder = self.client.request(method, &url);
 
         if endpoint.headers.is_some() {
             let headers = endpoint.headers.unwrap();
@@ -101,12 +194,12 @@ impl HttpClient for ReqwestBackend {
 
         if endpoint.user_agent.is_some() {
             let user_agent = endpoint.user_agent.unwrap();
-            request_builder = request_builder.header("user-agent", user_agent);
+            request_builder = request_builder.header(reqwest::header::USER_AGENT, user_agent);
         }
 
         if endpoint.content_type.is_some() {
             let content_type = endpoint.content_type.unwrap();
-            request_builder = request_builder.header("content-type", content_type);
+            request_builder = request_builder.header(reqwest::header::CONTENT_TYPE, content_type);
         }
 
         if endpoint.body.is_some() {
@@ -122,6 +215,12 @@ impl HttpClient for ReqwestBackend {
             request_builder = request_builder.body(body);
         }
 
+        if let Some(cookie_store) = &self.cookie_store {
+            request_builder = self
+                .inject_cookies(&url, request_builder, cookie_store)
+                .await?;
+        }
+
         let response = request_builder
             .timeout(endpoint.timeout)
             .send()
@@ -133,6 +232,10 @@ impl HttpClient for ReqwestBackend {
                     HttpClientError::Network(e.to_string())
                 }
             })?;
+
+        if let Some(cookie_store) = &self.cookie_store {
+            let _ = self.extract_cookies(&response, cookie_store).await;
+        }
 
         let status = response.status().as_u16();
         let headers: Vec<(String, String)> = response

@@ -19,9 +19,14 @@ impl ServiceFfiAdapter {
         &self,
         ffi_endpoint: FfiHttpEndpoint,
     ) -> Result<FfiHttpResponse, FfiAdapterError> {
+        let http_client = &self.runtime.http_client;
+        if http_client.is_none() {
+            return Err(FfiAdapterError::Configuration("http is not configured".to_string()));
+        }
+        
+        let http_client = http_client.as_ref().unwrap().clone();
         let domain_endpoint = ffi_endpoint.to_domain_endpoint()?;
 
-        let http_client = self.runtime.http_client.clone();
         let domain_response = self
             .runtime
             .clone()

@@ -1,7 +1,7 @@
 use std::time::Duration;
 use flutter_rust_bridge::{frb, ZeroCopyBuffer};
 use crate::adapters::ffi::errors::FfiAdapterError;
-use crate::domain::models::{HttpEndpoint, HttpMethod, HttpResponse};
+use crate::domain::models::http_models::{HttpEndpoint, HttpMethod, HttpResponse};
 
 #[frb]
 pub struct FfiHttpEndpoint {

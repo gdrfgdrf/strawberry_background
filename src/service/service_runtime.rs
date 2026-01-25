@@ -1,9 +1,11 @@
-use crate::domain::traits::{HttpClient};
+use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpResponse};
+use crate::domain::traits::cookie_traits::CookieStore;
+use crate::domain::traits::http_traits::HttpClient;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
-use crate::service::config::{HttpConfig, RuntimeConfig, TokioConfig};
+use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
+use std::panic::panic_any;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use crate::domain::models::{HttpClientError, HttpEndpoint, HttpResponse};
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {
@@ -17,17 +19,22 @@ pub enum InitError {
 
 pub struct ServiceRuntime {
     pub tokio_runtime: Runtime,
-    pub http_client: Arc<dyn HttpClient>,
+    pub http_client: Option<Arc<dyn HttpClient>>,
 }
 
 impl ServiceRuntime {
     pub fn initialize(config: RuntimeConfig) -> Result<Arc<Self>, InitError> {
         let tokio_runtime = Self::create_tokio_runtime(config.tokio)?;
 
-        let http_client = tokio_runtime.block_on(async {
-            let http_client = Self::create_http_client(config.http).await?;
-            Ok::<_, InitError>(http_client)
-        })?;
+        let http_client = if let Some(http_config) = config.http {
+            Some(tokio_runtime.block_on(async {
+                let http_client =
+                    Self::create_http_client(http_config, config.cookie_config).await?;
+                Ok::<_, InitError>(http_client)
+            })?)
+        } else {
+            None
+        };
 
         Ok(Arc::new(Self {
             tokio_runtime,
@@ -47,11 +54,14 @@ impl ServiceRuntime {
         &self,
         endpoint: HttpEndpoint,
     ) -> tokio::task::JoinHandle<Result<HttpResponse, HttpClientError>> {
-        let client = Arc::clone(&self.http_client);
+        if self.http_client.is_none() {
+            panic!("http is not configured");
+        }
 
-        self.tokio_runtime.spawn(async move {
-            client.execute(endpoint).await
-        })
+        let client = Arc::clone(&self.http_client.as_ref().unwrap());
+
+        self.tokio_runtime
+            .spawn(async move { client.execute(endpoint).await })
     }
 
     pub fn spawn_handle(&self) -> tokio::runtime::Handle {
@@ -77,8 +87,30 @@ impl ServiceRuntime {
             .map_err(|e| InitError::TokioInit(e.to_string()))
     }
 
-    async fn create_http_client(http_config: HttpConfig) -> Result<Arc<dyn HttpClient>, InitError> {
-        let backend = ReqwestBackend::with_config(http_config)
+    async fn create_http_client(
+        http_config: HttpConfig,
+        cookie_config: Option<CookieConfig>,
+    ) -> Result<Arc<dyn HttpClient>, InitError> {
+        let (cookie_store, auto_save_handle) = if let Some(cookie_config) = cookie_config {
+            let runtime = tokio::runtime::Handle::current();
+            let store = runtime
+                .block_on(async {
+                    crate::infrastructure::http::cookie_backend::FileBackedCookieStore::new(
+                        cookie_config,
+                    )
+                    .await
+                })
+                .map_err(|_e| InitError::Configuration("cookie error".to_string()))?;
+
+            let store = Arc::new(store);
+            let handle = store.clone().start_auto_save();
+
+            (Some(store as Arc<dyn CookieStore>), Some(handle))
+        } else {
+            (None, None)
+        };
+
+        let backend = ReqwestBackend::with_parameters(http_config, cookie_store, auto_save_handle)
             .map_err(|e| InitError::HttpClientInit(e.to_string()))?;
 
         Ok(Arc::new(backend))

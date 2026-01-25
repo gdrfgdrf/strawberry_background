@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use std::time::Duration;
-use crate::domain::traits::{DecryptionProvider, EncryptionProvider};
+use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider};
 
 pub struct RuntimeConfig {
     pub tokio: TokioConfig,
-    pub http: HttpConfig,
+    pub http: Option<HttpConfig>,
+    pub cookie_config: Option<CookieConfig>
 }
 
 #[derive(Debug, Clone)]
@@ -18,8 +20,16 @@ pub struct HttpConfig {
     pub request_timeout: Duration,
     pub pool_idle_timeout: Duration,
     pub max_connections_per_host: usize,
-    pub encryption_provider: Option<Box<dyn EncryptionProvider>>,
-    pub decryption_provider: Option<Box<dyn DecryptionProvider>>
+    pub cookie_config: Option<CookieConfig>,
+    pub encryption_provider: Option<Arc<dyn EncryptionProvider>>,
+    pub decryption_provider: Option<Arc<dyn DecryptionProvider>>
+}
+
+#[derive(Debug, Clone)]
+pub struct CookieConfig {
+    pub cookie_path: Option<String>,
+    pub debounce_delay: Duration,
+    pub auto_save_interval: Option<Duration>
 }
 
 impl Default for RuntimeConfig {
@@ -30,14 +40,8 @@ impl Default for RuntimeConfig {
                 thread_stack_size: None,
                 thread_name_prefix: None,
             },
-            http: HttpConfig {
-                connect_timeout: Duration::from_secs(10),
-                request_timeout: Duration::from_secs(30),
-                pool_idle_timeout: Duration::from_secs(90),
-                max_connections_per_host: 100,
-                encryption_provider: None,
-                decryption_provider: None
-            },
+            http: None,
+            cookie_config: None
         }
     }
 }

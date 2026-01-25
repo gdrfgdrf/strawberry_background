@@ -1,4 +1,4 @@
-use crate::domain::models::HttpClientError;
+use crate::domain::models::http_models::HttpClientError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FfiAdapterError {
@@ -26,6 +26,9 @@ impl FfiAdapterError {
             }
             HttpClientError::Serialization(msg) => FfiAdapterError::Serialization(msg),
             HttpClientError::Configuration(msg) => FfiAdapterError::Configuration(msg),
+            HttpClientError::InvalidHeader(msg) => {
+                FfiAdapterError::DomainError(format!("Invalid Header: {}", msg))
+            }
         }
     }
 }
