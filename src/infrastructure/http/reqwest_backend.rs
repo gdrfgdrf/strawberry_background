@@ -210,7 +210,7 @@ impl HttpClient for ReqwestBackend {
                     .as_ref()
                     .unwrap()
                     .encrypt(body)
-                    .await;
+                    .await?;
             }
             request_builder = request_builder.body(body);
         }
@@ -256,7 +256,7 @@ impl HttpClient for ReqwestBackend {
                 .as_ref()
                 .unwrap()
                 .decrypt(body)
-                .await;
+                .await?;
         }
 
         Ok(HttpResponse {

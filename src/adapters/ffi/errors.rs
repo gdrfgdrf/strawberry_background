@@ -29,6 +29,9 @@ impl FfiAdapterError {
             HttpClientError::InvalidHeader(msg) => {
                 FfiAdapterError::DomainError(format!("Invalid Header: {}", msg))
             }
+            HttpClientError::Crypto(msg) => {
+                FfiAdapterError::DomainError(format!("Crypto: {}", msg))
+            }
         }
     }
 }
