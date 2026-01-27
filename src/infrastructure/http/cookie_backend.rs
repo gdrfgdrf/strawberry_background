@@ -4,7 +4,7 @@ use crate::service::config::CookieConfig;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use std::time::SystemTime;
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::utils::url_component::extract_domain;
@@ -13,7 +13,6 @@ pub struct FileBackedCookieStore {
     inner: AsyncRwLock<InnerStore>,
     config: CookieConfig,
     storage_path: Option<String>,
-    last_save: Arc<RwLock<SystemTime>>,
     dirty: std::sync::atomic::AtomicBool,
 }
 
@@ -168,7 +167,6 @@ impl FileBackedCookieStore {
             }),
             storage_path: config.cookie_path.clone(),
             config,
-            last_save: Arc::new(RwLock::new(SystemTime::now())),
             dirty: std::sync::atomic::AtomicBool::new(false),
         };
 

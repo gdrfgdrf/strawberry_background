@@ -1,0 +1,16 @@
+name: strawberry_background_dart
+description: "the strawberry background in dart"
+version: 1.0.0
+
+environment:
+  sdk: ^3.7.2
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.0.2
+  flutter_rust_bridge: 2.10.0
+
+dev_dependencies: 
+  freezed: ^3.2.3

@@ -13,6 +13,7 @@ pub enum FfiAdapterError {
 }
 
 impl FfiAdapterError {
+    #[frb(ignore)]
     pub fn from_domain_error(err: HttpClientError) -> Self {
         match err {
             HttpClientError::Network(msg) => {

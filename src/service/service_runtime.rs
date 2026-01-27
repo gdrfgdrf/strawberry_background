@@ -3,7 +3,6 @@ use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::HttpClient;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
-use std::panic::panic_any;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 

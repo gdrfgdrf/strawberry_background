@@ -1,7 +1,6 @@
 use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
-use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
 use crate::service::config::{CookieConfig, HttpConfig};
 use async_trait::async_trait;
 use reqwest::{Client, Method, Url};
@@ -13,7 +12,6 @@ pub struct ReqwestBackend {
     encryption_provider: Option<Arc<dyn EncryptionProvider>>,
     decryption_provider: Option<Arc<dyn DecryptionProvider>>,
     cookie_store: Option<Arc<dyn CookieStore>>,
-    auto_save_handle: Option<tokio::task::JoinHandle<()>>,
     client: Client,
 }
 
@@ -29,7 +27,6 @@ impl ReqwestBackend {
             encryption_provider: None,
             decryption_provider: None,
             cookie_store: None,
-            auto_save_handle: None,
             client,
         })
     }
@@ -51,7 +48,6 @@ impl ReqwestBackend {
             encryption_provider: config.encryption_provider,
             decryption_provider: config.decryption_provider,
             cookie_store,
-            auto_save_handle,
             client,
         })
     }
@@ -97,6 +93,7 @@ impl ReqwestBackend {
         cookie_store: &Arc<dyn CookieStore>,
     ) -> Result<(), HttpClientError> {
         if let Some(url) = response.url().host_str() {
+
             for cookie in response.cookies() {
                 let name = cookie.name();
                 let value = cookie.value();
@@ -118,7 +115,7 @@ impl ReqwestBackend {
                     }
                 };
 
-                let same_site = if (first_same_site != second_same_site) {
+                let same_site = if first_same_site != second_same_site {
                     None
                 } else {
                     Some(first_same_site)
@@ -181,8 +178,6 @@ impl HttpClient for ReqwestBackend {
 
         let method = Self::convert_method(&endpoint.method);
         let url = endpoint.build_url();
-        let parsed_url =
-            Url::parse(&url).map_err(|e| HttpClientError::InvalidUrl(e.to_string()))?;
         let mut request_builder = self.client.request(method, &url);
 
         if endpoint.headers.is_some() {

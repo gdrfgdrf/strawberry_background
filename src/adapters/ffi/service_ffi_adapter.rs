@@ -1,4 +1,3 @@
-use crate::adapters::ffi::errors::FfiAdapterError;
 use crate::adapters::ffi::http::models::{FfiHttpEndpoint, FfiHttpResponse};
 use crate::service::service_runtime::ServiceRuntime;
 use std::sync::Arc;
@@ -6,10 +5,12 @@ use flutter_rust_bridge::frb;
 
 #[frb]
 pub struct ServiceFfiAdapter {
+    #[frb(ignore)]
     runtime: Arc<ServiceRuntime>,
 }
 
 impl ServiceFfiAdapter {
+    #[frb(ignore)]
     pub fn new(runtime: Arc<ServiceRuntime>) -> Self {
         Self { runtime }
     }
@@ -18,10 +19,10 @@ impl ServiceFfiAdapter {
     pub async fn execute_http_endpoint(
         &self,
         ffi_endpoint: FfiHttpEndpoint,
-    ) -> Result<FfiHttpResponse, FfiAdapterError> {
+    ) -> Result<FfiHttpResponse, String> {
         let http_client = &self.runtime.http_client;
         if http_client.is_none() {
-            return Err(FfiAdapterError::Configuration("http is not configured".to_string()));
+            return Err("http is not configured".to_string());
         }
         
         let http_client = http_client.as_ref().unwrap().clone();
@@ -31,7 +32,7 @@ impl ServiceFfiAdapter {
             .runtime
             .clone()
             .execute_async(async move { http_client.execute(domain_endpoint).await })
-            .map_err(FfiAdapterError::from_domain_error)?;
+            .map_err(|e| e.to_string())?;
 
         Ok(FfiHttpResponse::from(domain_response))
     }
