@@ -26,7 +26,7 @@ impl ServiceFfiAdapter {
         }
         
         let http_client = http_client.as_ref().unwrap().clone();
-        let domain_endpoint = ffi_endpoint.to_domain_endpoint()?;
+        let domain_endpoint = ffi_endpoint.to_domain_endpoint().map(|e| "Convert to domain endpoint error".to_string())?;
 
         let domain_response = self
             .runtime
