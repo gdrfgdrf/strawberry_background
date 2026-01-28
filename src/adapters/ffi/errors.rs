@@ -1,3 +1,4 @@
+use flutter_rust_bridge::frb;
 use crate::domain::models::http_models::HttpClientError;
 
 #[derive(Debug, thiserror::Error)]
