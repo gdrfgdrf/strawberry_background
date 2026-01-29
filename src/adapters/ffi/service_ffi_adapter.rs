@@ -3,19 +3,20 @@ use crate::service::service_runtime::ServiceRuntime;
 use std::sync::Arc;
 use flutter_rust_bridge::frb;
 
-#[frb]
+#[frb(external)]
 pub struct ServiceFfiAdapter {
     #[frb(ignore)]
     runtime: Arc<ServiceRuntime>,
 }
 
+#[frb(external)]
 impl ServiceFfiAdapter {
     #[frb(ignore)]
     pub fn new(runtime: Arc<ServiceRuntime>) -> Self {
         Self { runtime }
     }
 
-    #[frb]
+    #[frb(external)]
     pub async fn execute_http_endpoint(
         &self,
         ffi_endpoint: FfiHttpEndpoint,
