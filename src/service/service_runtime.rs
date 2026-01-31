@@ -5,6 +5,7 @@ use crate::domain::traits::http_traits::HttpClient;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::runtime::Runtime;
 
 #[derive(Debug, thiserror::Error)]
@@ -107,8 +108,12 @@ impl ServiceRuntime {
         if let Some(stack_size) = tokio_config.thread_stack_size {
             builder.thread_stack_size(stack_size);
         }
-        if let Some(prefix) = &tokio_config.thread_name_prefix {
-            builder.thread_name(prefix);
+        if let Some(prefix) = tokio_config.thread_name_prefix {
+            builder.thread_name_fn(move || {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("{}-{}", prefix, id)
+            });
         }
 
         builder
