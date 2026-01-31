@@ -20,14 +20,12 @@ impl ServiceFfiAdapter {
             return Err("http is not configured".to_string());
         }
         
-        let http_client = http_client.as_ref().unwrap().clone();
         let domain_endpoint = ffi_endpoint.to_domain_endpoint().map_err(|e| "Convert to domain endpoint error".to_string())?;
 
         let domain_response = self
             .runtime
-            .clone()
-            .execute_async(async move { http_client.execute(domain_endpoint).await })
-            .map_err(|e| e.to_string())?;
+            .execute_http(domain_endpoint).await
+            .map_err(|e| e.to_string())?.map_err(|e| "http client error")?;
 
         Ok(FfiHttpResponse::from(domain_response))
     }

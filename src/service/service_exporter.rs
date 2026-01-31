@@ -30,3 +30,63 @@ pub fn create_service_exporter_with_tokio_runtime(
     let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime)?;
     Ok(ServiceExporter::new(runtime))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::models::http_models::{HttpEndpoint, HttpMethod};
+    use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
+    use crate::service::service_exporter::create_service_exporter;
+    use std::time::Duration;
+
+    macro_rules! await_test {
+        ($e:expr) => {
+            tokio_test::block_on($e)
+        };
+    }
+
+    #[test]
+    fn test_http() {
+        let service_exporter = create_service_exporter(RuntimeConfig {
+            tokio: TokioConfig {
+                worker_threads: Some(4),
+                thread_stack_size: None,
+                thread_name_prefix: Some("strawberry-background-worker".to_string()),
+            },
+            http: Some(HttpConfig {
+                connect_timeout: Duration::from_secs(10),
+                request_timeout: Duration::from_secs(30),
+                pool_idle_timeout: Duration::from_secs(90),
+                max_connections_per_host: 100,
+                encryption_provider: None,
+                decryption_provider: None,
+                cookie_config: Some(CookieConfig {
+                    cookie_path: Some(
+                        "test_cookie"
+                            .to_string(),
+                    ),
+                    debounce_delay: Duration::from_secs(10),
+                    auto_save_interval: Some(Duration::from_secs(60)),
+                }),
+            }),
+            cookie_config: None,
+        })
+        .unwrap();
+        let runtime = service_exporter.runtime;
+        let response = await_test!(runtime.execute_http(HttpEndpoint {
+            path: "/search".to_string(),
+            domain: "https://cn.bing.com".to_string(),
+            body: None,
+            timeout: Duration::from_secs(60),
+            headers: None,
+            path_params: None,
+            query_params: Some(vec![("q".to_string(), "netease".to_string())]),
+            method: HttpMethod::Get,
+            requires_encryption: false,
+            requires_decryption: false,
+            user_agent: None,
+            content_type: None
+        })).unwrap().unwrap();
+        
+        println!("response length: {}", response.body.len());
+    }
+}

@@ -174,7 +174,7 @@ impl HttpClient for ReqwestBackend {
                 "no decryption provider".parse().unwrap(),
             ));
         }
-
+        
         let method = Self::convert_method(&endpoint.method);
         let url = endpoint.build_url();
         let mut request_builder = self.client.request(method, &url);
