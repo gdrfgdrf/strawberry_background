@@ -1,9 +1,9 @@
-use std::panic::AssertUnwindSafe;
 use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpResponse};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::HttpClient;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::runtime::Runtime;
@@ -44,8 +44,11 @@ impl ServiceRuntime {
             http_client,
         }))
     }
-    
-    pub fn with_tokio_runtime(config: RuntimeConfig, tokio_runtime: Arc<AssertUnwindSafe<Runtime>>) -> Result<Arc<Self>, InitError> {
+
+    pub fn with_tokio_runtime(
+        config: RuntimeConfig,
+        tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
+    ) -> Result<Arc<Self>, InitError> {
         let http_client = if let Some(http_config) = config.http {
             Some(tokio_runtime.block_on(async {
                 let http_client =
@@ -55,14 +58,14 @@ impl ServiceRuntime {
         } else {
             None
         };
-        
+
         Ok(Arc::new(Self {
             tokio_runtime: None,
             provided_tokio_runtime: Some(tokio_runtime),
-            http_client
+            http_client,
         }))
     }
-    
+
     pub fn available_runtime(&self) -> &Runtime {
         if self.tokio_runtime.is_some() {
             return self.tokio_runtime.as_ref().unwrap();
@@ -139,7 +142,7 @@ impl ServiceRuntime {
 
             let store = Arc::new(store);
             let _ = store.clone().start_auto_save();
-            
+
             Some(store as Arc<dyn CookieStore>)
         } else {
             None
