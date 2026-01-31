@@ -14,9 +14,9 @@ pub trait HttpClient: Send + Sync + 'static {
 }
 
 pub trait EncryptionProvider: Send + Sync + 'static {
-    fn encrypt(&self, bytes: &mut Vec<u8>) -> Result<Vec<u8>, HttpClientError>;
+    fn encrypt(&self, bytes: Vec<u8>) -> Result<Vec<u8>, HttpClientError>;
 }
 
 pub trait DecryptionProvider: Send + Sync + 'static {
-    fn decrypt(&self, bytes: &mut Vec<u8>) -> Result<Vec<u8>, HttpClientError>;
+    fn decrypt(&self, bytes: Vec<u8>) -> Result<Vec<u8>, HttpClientError>;
 }
