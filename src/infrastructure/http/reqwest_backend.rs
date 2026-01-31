@@ -34,7 +34,6 @@ impl ReqwestBackend {
     pub fn with_parameters(
         config: HttpConfig,
         cookie_store: Option<Arc<dyn CookieStore>>,
-        auto_save_handle: Option<tokio::task::JoinHandle<()>>
     ) -> Result<Self, HttpClientError> {
         let client = Client::builder()
             .pool_idle_timeout(config.pool_idle_timeout)
