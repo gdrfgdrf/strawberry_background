@@ -4,20 +4,19 @@ use std::sync::Arc;
 use flutter_rust_bridge::frb;
 use crate::adapters::ffi::service_ffi_adapter::ServiceFfiAdapter;
 
-#[frb(external)]
+#[frb]
 pub struct ServiceExporterFfiAdapter {
     #[frb(ignore)]
     runtime: Arc<ServiceRuntime>,
 }
 
-#[frb(external)]
 impl ServiceExporterFfiAdapter {
     #[frb(ignore)]
     pub fn new(runtime: Arc<ServiceRuntime>) -> Self {
         Self { runtime }
     }
 
-    #[frb(external)]
+    #[frb]
     pub fn runtime_ffi_adapter(&self) -> ServiceFfiAdapter {
         ServiceFfiAdapter::new(Arc::clone(&self.runtime))
     }
