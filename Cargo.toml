@@ -6,7 +6,6 @@ edition = "2024"
 [lib]
 name = "strawberry_background"
 path = "src/lib.rs"
-crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 reqwest = { version = "0.13.1", features = ["json"] }

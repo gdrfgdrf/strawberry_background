@@ -57,7 +57,7 @@ impl FfiHttpEndpoint {
             content_type
         }
     }
-    
+
     pub fn to_domain_endpoint(self) -> Result<HttpEndpoint, FfiAdapterError> {
         Ok(HttpEndpoint {
             path: self.path,
