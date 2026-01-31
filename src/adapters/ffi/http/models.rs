@@ -12,7 +12,7 @@ pub struct FfiHttpEndpoint {
     pub path_params: Option<Vec<(String, String)>>,
     pub query_params: Option<Vec<(String, String)>>,
 
-    pub method: String,
+    pub method: HttpMethod,
     pub requires_encryption: bool,
     pub requires_decryption: bool,
     pub user_agent: Option<String>,
@@ -26,15 +26,39 @@ pub struct FfiHttpResponse {
 }
 
 impl FfiHttpEndpoint {
-    pub fn to_domain_endpoint(self) -> Result<HttpEndpoint, FfiAdapterError> {
-        let method = match self.method.as_str() {
-            "GET" => HttpMethod::Get,
-            "POST" => HttpMethod::Post,
-            "PUT" => HttpMethod::Put,
-            "DELETE" => HttpMethod::Delete,
-            _ => return Err(FfiAdapterError::InvalidParameter(self.method)),
-        };
+    pub fn new(
+        path: String,
+        domain: String,
+        body: Option<Vec<u8>>,
+        timeout_millis: u64,
 
+        headers: Option<Vec<(String, String)>>,
+        path_params: Option<Vec<(String, String)>>,
+        query_params: Option<Vec<(String, String)>>,
+
+        method: HttpMethod,
+        requires_encryption: bool,
+        requires_decryption: bool,
+        user_agent: Option<String>,
+        content_type: Option<String>,
+    ) -> FfiHttpEndpoint {
+        FfiHttpEndpoint {
+            path,
+            domain,
+            body,
+            timeout_millis,
+            headers,
+            path_params,
+            query_params,
+            method,
+            requires_encryption,
+            requires_decryption,
+            user_agent,
+            content_type
+        }
+    }
+    
+    pub fn to_domain_endpoint(self) -> Result<HttpEndpoint, FfiAdapterError> {
         Ok(HttpEndpoint {
             path: self.path,
             domain: self.domain,
@@ -43,7 +67,7 @@ impl FfiHttpEndpoint {
             headers: self.headers,
             path_params: self.path_params,
             query_params: self.query_params,
-            method,
+            method: self.method,
             requires_encryption: self.requires_encryption,
             requires_decryption: self.requires_decryption,
             user_agent: self.user_agent,
