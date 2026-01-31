@@ -1,9 +1,7 @@
 use crate::adapters::ffi::errors::FfiAdapterError;
 use crate::domain::models::http_models::{HttpEndpoint, HttpMethod, HttpResponse};
-use flutter_rust_bridge::frb;
 use std::time::Duration;
 
-#[frb]
 pub struct FfiHttpEndpoint {
     pub path: String,
     pub domain: String,
@@ -21,7 +19,6 @@ pub struct FfiHttpEndpoint {
     pub content_type: Option<String>,
 }
 
-#[frb]
 pub struct FfiHttpResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -29,7 +26,6 @@ pub struct FfiHttpResponse {
 }
 
 impl FfiHttpEndpoint {
-    #[frb(ignore)]
     pub fn to_domain_endpoint(self) -> Result<HttpEndpoint, FfiAdapterError> {
         let method = match self.method.as_str() {
             "GET" => HttpMethod::Get,
@@ -57,7 +53,6 @@ impl FfiHttpEndpoint {
 }
 
 impl From<HttpResponse> for FfiHttpResponse {
-    #[frb(ignore)]
     fn from(domain_resp: HttpResponse) -> Self {
         FfiHttpResponse {
             status: domain_resp.status,

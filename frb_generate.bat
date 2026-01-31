@@ -1,1 +1,0 @@
-flutter_rust_bridge_codegen generate --rust-input crate::adapters::ffi --rust-root . --dart-output dart/lib/ffi

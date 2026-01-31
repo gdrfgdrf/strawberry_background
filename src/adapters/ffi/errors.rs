@@ -1,4 +1,3 @@
-use flutter_rust_bridge::frb;
 use crate::domain::models::http_models::HttpClientError;
 
 #[derive(Debug, thiserror::Error)]
@@ -14,7 +13,6 @@ pub enum FfiAdapterError {
 }
 
 impl FfiAdapterError {
-    #[frb(ignore)]
     pub fn from_domain_error(err: HttpClientError) -> Self {
         match err {
             HttpClientError::Network(msg) => {

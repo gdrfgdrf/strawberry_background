@@ -6,9 +6,9 @@ edition = "2024"
 [lib]
 name = "strawberry_background"
 path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-flutter_rust_bridge = "=2.10.0"
 reqwest = { version = "0.13.1", features = ["json"] }
 tokio = { version = "1.49.0", features = ["full"] }
 thiserror = "2.0.18"
