@@ -22,7 +22,8 @@ pub struct HttpConfig {
     pub max_connections_per_host: usize,
     pub cookie_config: Option<CookieConfig>,
     pub encryption_provider: Option<Arc<dyn EncryptionProvider>>,
-    pub decryption_provider: Option<Arc<dyn DecryptionProvider>>
+    pub decryption_provider: Option<Arc<dyn DecryptionProvider>>,
+    pub all_proxy: Option<String>
 }
 
 #[derive(Debug, Clone)]

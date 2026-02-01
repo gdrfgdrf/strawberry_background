@@ -3,7 +3,7 @@ use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
 use crate::service::config::{CookieConfig, HttpConfig};
 use async_trait::async_trait;
-use reqwest::{Client, Method, Url};
+use reqwest::{Client, Method, Proxy, Url};
 use std::sync::Arc;
 use std::time::Duration;
 use crate::domain::models::cookie_models::{Cookie, SameSite};
@@ -35,12 +35,17 @@ impl ReqwestBackend {
         config: HttpConfig,
         cookie_store: Option<Arc<dyn CookieStore>>,
     ) -> Result<Self, HttpClientError> {
-        let client = Client::builder()
+        let mut client = Client::builder()
             .pool_idle_timeout(config.pool_idle_timeout)
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
-            .pool_max_idle_per_host(config.max_connections_per_host)
-            .build()
+            .pool_max_idle_per_host(config.max_connections_per_host);
+        
+        if let Some(all_proxy) = config.all_proxy {
+            client = client.proxy(Proxy::all(all_proxy).unwrap());
+        }
+        
+        let client = client.build()
             .map_err(|e| HttpClientError::Network(e.to_string()))?;
 
         Ok(Self {
