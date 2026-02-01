@@ -36,7 +36,11 @@ mod tests {
     use crate::domain::models::http_models::{HttpEndpoint, HttpMethod};
     use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
     use crate::service::service_exporter::create_service_exporter;
+    use std::hint::spin_loop;
+    use std::io;
+    use std::thread::sleep;
     use std::time::Duration;
+    use tokio::runtime;
 
     macro_rules! await_test {
         ($e:expr) => {
@@ -46,6 +50,11 @@ mod tests {
 
     #[test]
     fn test_http() {
+        let rt = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        
         let service_exporter = create_service_exporter(RuntimeConfig {
             tokio: TokioConfig {
                 worker_threads: Some(4),
@@ -59,16 +68,13 @@ mod tests {
                 max_connections_per_host: 100,
                 encryption_provider: None,
                 decryption_provider: None,
-                cookie_config: Some(CookieConfig {
-                    cookie_path: Some(
-                        "test_cookie"
-                            .to_string(),
-                    ),
-                    debounce_delay: Duration::from_secs(10),
-                    auto_save_interval: Some(Duration::from_secs(60)),
-                }),
+                cookie_config: None,
             }),
-            cookie_config: None,
+            cookie: Some(CookieConfig {
+                cookie_path: Some("test_cookie.json".to_string()),
+                debounce_delay: Duration::from_secs(10),
+                auto_save_interval: Some(Duration::from_secs(60)),
+            }),
         })
         .unwrap();
         let runtime = service_exporter.runtime;
@@ -85,8 +91,17 @@ mod tests {
             requires_decryption: false,
             user_agent: None,
             content_type: None
-        })).unwrap().unwrap();
-        
+        }))
+        .unwrap()
+        .unwrap();
+
         println!("response length: {}", response.body.len());
+
+        /// test cookie store
+        rt.block_on(async {
+            loop {
+                
+            }
+        });
     }
 }

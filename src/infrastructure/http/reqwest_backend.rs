@@ -92,7 +92,6 @@ impl ReqwestBackend {
         cookie_store: &Arc<dyn CookieStore>,
     ) -> Result<(), HttpClientError> {
         if let Some(url) = response.url().host_str() {
-
             for cookie in response.cookies() {
                 let name = cookie.name();
                 let value = cookie.value();
@@ -254,7 +253,7 @@ impl HttpClient for ReqwestBackend {
         Ok(HttpResponse {
             status,
             headers,
-            body, // 大文件应考虑使用流式处理，此处返回Vec<u8>作为示例
+            body,
         })
     }
 }

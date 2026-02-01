@@ -5,7 +5,7 @@ use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider}
 pub struct RuntimeConfig {
     pub tokio: TokioConfig,
     pub http: Option<HttpConfig>,
-    pub cookie_config: Option<CookieConfig>
+    pub cookie: Option<CookieConfig>
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ impl Default for RuntimeConfig {
                 thread_name_prefix: None,
             },
             http: None,
-            cookie_config: None
+            cookie: None
         }
     }
 }
