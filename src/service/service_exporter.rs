@@ -50,11 +50,6 @@ mod tests {
 
     #[test]
     fn test_http() {
-        let rt = runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        
         let service_exporter = create_service_exporter(RuntimeConfig {
             tokio: TokioConfig {
                 worker_threads: Some(4),
@@ -98,7 +93,7 @@ mod tests {
         println!("response length: {}", response.body.len());
 
         /// test cookie store
-        rt.block_on(async {
+        await_test!(async {
             loop {
                 
             }

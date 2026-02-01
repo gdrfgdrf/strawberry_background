@@ -73,7 +73,7 @@ impl HttpEndpoint {
     }
 
     fn combine_query_params_to_path(&self, path: String) -> String {
-        if self.path_params.is_none() {
+        if self.query_params.is_none() {
             return path;
         }
         let query_params = self.query_params.as_ref().unwrap();
