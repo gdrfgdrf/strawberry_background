@@ -196,7 +196,7 @@ impl ServiceRuntime {
     ) -> Result<Arc<dyn CookieStore>, InitError> {
         let store = FileBackedCookieStore::new(cookie_config)
             .await
-            .map_err(|_e| InitError::Configuration("cookie error".to_string()))?;
+            .map_err(|e| InitError::Configuration(e.to_string()))?;
 
         let store = Arc::new(store);
         Ok(store)

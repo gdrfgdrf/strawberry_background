@@ -19,13 +19,17 @@ impl ServiceFfiAdapter {
         if http_client.is_none() {
             return Err("http is not configured".to_string());
         }
-        
-        let domain_endpoint = ffi_endpoint.to_domain_endpoint().map_err(|e| "Convert to domain endpoint error".to_string())?;
+
+        let domain_endpoint = ffi_endpoint
+            .to_domain_endpoint()
+            .map_err(|e| format!("{}", e))?;
 
         let domain_response = self
             .runtime
-            .execute_http(domain_endpoint).await
-            .map_err(|e| e.to_string())?.map_err(|e| "http client error")?;
+            .execute_http(domain_endpoint)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("{}", e))?;
 
         Ok(FfiHttpResponse::from(domain_response))
     }
