@@ -63,6 +63,29 @@ impl Cookie {
             persistent: expires.is_some(),
         }
     }
+    
+    pub fn new_without_expires(
+        domain: String,
+        path: String,
+        name: String,
+        value: String,
+        secure: bool,
+        http_only: bool,
+        same_site: Option<SameSite>,
+    ) -> Self {
+        let now = SystemTime::now();
+        Self {
+            key: CookieKey { domain, path, name },
+            value,
+            expires: None,
+            creation_time: now,
+            last_access_time: now,
+            secure,
+            http_only,
+            same_site,
+            persistent: false,
+        }
+    }
 
     pub fn is_expired(&self) -> bool {
         match self.expires {
