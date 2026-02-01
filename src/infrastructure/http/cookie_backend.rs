@@ -1,15 +1,15 @@
 use crate::domain::models::cookie_models::{Cookie, CookieError, CookieKey};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::service::config::CookieConfig;
+use crate::utils::url_component::extract_domain;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::io;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock as AsyncRwLock;
-use crate::utils::url_component::extract_domain;
 
 pub struct FileBackedCookieStore {
     inner: AsyncRwLock<InnerStore>,
@@ -85,7 +85,7 @@ impl CookieStore for FileBackedCookieStore {
         if domain.is_err() {
             return vec![];
         }
-        
+
         self.get_for_domain(&domain.unwrap()).await
     }
 
@@ -162,9 +162,17 @@ struct SerializableStore {
 
 impl FileBackedCookieStore {
     pub async fn new(config: CookieConfig) -> Result<Self, CookieError> {
+        let mut initial_cookies: HashMap<CookieKey, Cookie> = HashMap::new();
+        if let Some(initials) = config.initial_cookies.clone() {
+            initials.into_iter().for_each(|cookie| {
+                let key = cookie.key.clone();
+                initial_cookies.insert(key, cookie);
+            });
+        }
+
         let store = Self {
             inner: AsyncRwLock::new(InnerStore {
-                cookies: HashMap::new(),
+                cookies: initial_cookies,
                 session_cookies: HashMap::new(),
             }),
             storage_path: config.cookie_path.clone(),
@@ -173,7 +181,6 @@ impl FileBackedCookieStore {
         };
 
         store.load().await?;
-
         Ok(store)
     }
 

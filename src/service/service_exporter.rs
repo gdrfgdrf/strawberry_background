@@ -70,6 +70,7 @@ mod tests {
                 cookie_path: Some("test_cookie.json".to_string()),
                 debounce_delay: Duration::from_secs(10),
                 auto_save_interval: Some(Duration::from_secs(60)),
+                initial_cookies: None
             }),
         })
         .unwrap();

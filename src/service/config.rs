@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use crate::domain::models::cookie_models::Cookie;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider};
 
 pub struct RuntimeConfig {
@@ -30,7 +31,8 @@ pub struct HttpConfig {
 pub struct CookieConfig {
     pub cookie_path: Option<String>,
     pub debounce_delay: Duration,
-    pub auto_save_interval: Option<Duration>
+    pub auto_save_interval: Option<Duration>,
+    pub initial_cookies: Option<Vec<Cookie>>
 }
 
 impl Default for RuntimeConfig {
