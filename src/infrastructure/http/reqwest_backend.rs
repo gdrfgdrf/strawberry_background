@@ -1,3 +1,4 @@
+use crate::domain::models::cookie_models::{Cookie, SameSite};
 use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
@@ -6,7 +7,6 @@ use async_trait::async_trait;
 use reqwest::{Client, Method, Proxy, Url};
 use std::sync::Arc;
 use std::time::Duration;
-use crate::domain::models::cookie_models::{Cookie, SameSite};
 
 pub struct ReqwestBackend {
     encryption_provider: Option<Arc<dyn EncryptionProvider>>,
@@ -40,12 +40,13 @@ impl ReqwestBackend {
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
             .pool_max_idle_per_host(config.max_connections_per_host);
-        
+
         if let Some(all_proxy) = config.all_proxy {
             client = client.proxy(Proxy::all(all_proxy).unwrap());
         }
-        
-        let client = client.build()
+
+        let client = client
+            .build()
             .map_err(|e| HttpClientError::Network(e.to_string()))?;
 
         Ok(Self {
@@ -100,22 +101,14 @@ impl ReqwestBackend {
             for cookie in response.cookies() {
                 let name = cookie.name();
                 let value = cookie.value();
-                
+
                 let first_same_site = match cookie.same_site_lax() {
-                    true => {
-                        SameSite::Lax
-                    }
-                    false => {
-                        SameSite::Strict
-                    }
+                    true => SameSite::Lax,
+                    false => SameSite::Strict,
                 };
                 let second_same_site = match cookie.same_site_strict() {
-                    true => {
-                        SameSite::Strict
-                    }
-                    false => {
-                        SameSite::Lax
-                    }
+                    true => SameSite::Strict,
+                    false => SameSite::Lax,
                 };
 
                 let same_site = if first_same_site != second_same_site {
@@ -123,7 +116,7 @@ impl ReqwestBackend {
                 } else {
                     Some(first_same_site)
                 };
-                
+
                 let cookie = Cookie::new(
                     url.to_string(),
                     response.url().path().to_string(),
@@ -167,7 +160,7 @@ impl HttpClient for ReqwestBackend {
             && self.encryption_provider.is_none()
         {
             return Err(HttpClientError::Configuration(
-                "no encryption provider".parse().unwrap(),
+                "no encryption provider".to_string(),
             ));
         }
         if endpoint.body.is_some()
@@ -175,10 +168,10 @@ impl HttpClient for ReqwestBackend {
             && self.decryption_provider.is_none()
         {
             return Err(HttpClientError::Configuration(
-                "no decryption provider".parse().unwrap(),
+                "no decryption provider".to_string(),
             ));
         }
-        
+
         let method = Self::convert_method(&endpoint.method);
         let url = endpoint.build_url();
         let mut request_builder = self.client.request(method, &url);
@@ -203,11 +196,7 @@ impl HttpClient for ReqwestBackend {
         if endpoint.body.is_some() {
             let mut body = endpoint.body.unwrap();
             if endpoint.requires_encryption {
-                body = self
-                    .encryption_provider
-                    .as_ref()
-                    .unwrap()
-                    .encrypt(body)?;
+                body = self.encryption_provider.as_ref().unwrap().encrypt(body)?;
             }
             request_builder = request_builder.body(body);
         }
@@ -248,11 +237,7 @@ impl HttpClient for ReqwestBackend {
             .to_vec();
 
         if endpoint.requires_decryption {
-            body = self
-                .decryption_provider
-                .as_ref()
-                .unwrap()
-                .decrypt(body)?;
+            body = self.decryption_provider.as_ref().unwrap().decrypt(body)?;
         }
 
         Ok(HttpResponse {
