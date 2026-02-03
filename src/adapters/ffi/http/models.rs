@@ -2,6 +2,7 @@ use crate::adapters::ffi::errors::FfiAdapterError;
 use crate::domain::models::http_models::{HttpEndpoint, HttpMethod, HttpResponse};
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct FfiHttpEndpoint {
     pub path: String,
     pub domain: String,
@@ -19,12 +20,14 @@ pub struct FfiHttpEndpoint {
     pub content_type: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct FfiHttpResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub enum FfiHttpMethod {
     Get,
     Post,

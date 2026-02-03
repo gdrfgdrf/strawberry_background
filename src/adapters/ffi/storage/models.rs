@@ -1,11 +1,13 @@
 use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct FfiReadFile {
     pub path: String,
     pub timeout_millis: u64,
 }
 
+#[derive(Clone)]
 pub struct FfiWriteFile {
     pub path: String,
     pub mode: FfiWriteMode,
@@ -14,11 +16,13 @@ pub struct FfiWriteFile {
     pub data: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub enum FfiWriteMode {
     Cover,
     Append,
 }
 
+#[derive(Clone)]
 pub enum FfiEnsureMode {
     Flush,
     SyncData,
