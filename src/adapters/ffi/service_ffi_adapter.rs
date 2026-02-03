@@ -1,4 +1,5 @@
 use crate::adapters::ffi::http::models::{FfiHttpEndpoint, FfiHttpResponse};
+use crate::adapters::ffi::storage::models::{FfiReadFile, FfiWriteFile};
 use crate::service::service_runtime::ServiceRuntime;
 use std::sync::Arc;
 
@@ -15,22 +16,41 @@ impl ServiceFfiAdapter {
         &self,
         ffi_endpoint: FfiHttpEndpoint,
     ) -> Result<FfiHttpResponse, String> {
-        let http_client = &self.runtime.http_client;
-        if http_client.is_none() {
-            return Err("http is not configured".to_string());
-        }
-
-        let domain_endpoint = ffi_endpoint
-            .to_domain_endpoint()
-            .map_err(|e| format!("{}", e))?;
-
+        let domain_endpoint = ffi_endpoint.into();
         let domain_response = self
             .runtime
             .execute_http(domain_endpoint)
+            .map_err(|e| e.to_string())?
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|e| format!("{}", e))?;
+            .map_err(|e| e.to_string())?;
 
         Ok(FfiHttpResponse::from(domain_response))
+    }
+
+    pub async fn read_file(&self, ffi_read_file: FfiReadFile) -> Result<Vec<u8>, String> {
+        let domain_read_file = ffi_read_file.into();
+        let data = self
+            .runtime
+            .read_file(domain_read_file)
+            .map_err(|e| e.to_string())?
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+
+        Ok(data)
+    }
+
+    pub async fn write_file(&self, ffi_write_file: FfiWriteFile) -> Result<(), String> {
+        let domain_write_file = ffi_write_file.into();
+        let data = self
+            .runtime
+            .write_file(domain_write_file)
+            .map_err(|e| e.to_string())?
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+
+        Ok(data)
     }
 }

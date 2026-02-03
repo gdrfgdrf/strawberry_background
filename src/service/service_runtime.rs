@@ -1,13 +1,16 @@
 use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpResponse};
+use crate::domain::models::storage_models::{ReadFile, StorageError, WriteFile};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::HttpClient;
+use crate::domain::traits::storage_traits::StorageManager;
 use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
+use crate::infrastructure::storage::storage_backend::AsyncStorageManager;
 use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,11 +23,18 @@ pub enum InitError {
     Configuration(String),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ServiceError {
+    #[error("{0} service is not configured")]
+    NotConfigured(String),
+}
+
 pub struct ServiceRuntime {
     pub tokio_runtime: Option<Runtime>,
     pub provided_tokio_runtime: Option<Arc<AssertUnwindSafe<Runtime>>>,
     pub http_client: Option<Arc<dyn HttpClient>>,
     pub cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>>,
+    pub storage_manager: Option<Arc<dyn StorageManager>>,
 }
 
 impl ServiceRuntime {
@@ -43,19 +53,20 @@ impl ServiceRuntime {
         }
 
         let http_client = if let Some(http_config) = config.http {
-            Some(tokio_runtime.block_on(async {
-                let http_client = Self::create_http_client(http_config, cookie_store).await?;
-                Ok::<_, InitError>(http_client)
-            })?)
+            let http_client = Self::create_http_client(http_config, cookie_store)?;
+            Some(http_client)
         } else {
             None
         };
+
+        let storage_manager = Self::create_storage_manager()?;
 
         Ok(Arc::new(Self {
             tokio_runtime: Some(tokio_runtime),
             provided_tokio_runtime: None,
             http_client,
             cookie_auto_save_handle,
+            storage_manager: Some(storage_manager),
         }))
     }
 
@@ -75,19 +86,20 @@ impl ServiceRuntime {
         }
 
         let http_client = if let Some(http_config) = config.http {
-            Some(tokio_runtime.block_on(async {
-                let http_client = Self::create_http_client(http_config, cookie_store).await?;
-                Ok::<_, InitError>(http_client)
-            })?)
+            let http_client = Self::create_http_client(http_config, cookie_store)?;
+            Some(http_client)
         } else {
             None
         };
+
+        let storage_manager = Self::create_storage_manager()?;
 
         Ok(Arc::new(Self {
             tokio_runtime: None,
             provided_tokio_runtime: Some(tokio_runtime),
             http_client,
             cookie_auto_save_handle,
+            storage_manager: Some(storage_manager),
         }))
     }
 
@@ -112,15 +124,44 @@ impl ServiceRuntime {
     pub fn execute_http(
         &self,
         endpoint: HttpEndpoint,
-    ) -> JoinHandle<Result<HttpResponse, HttpClientError>> {
+    ) -> Result<JoinHandle<Result<HttpResponse, HttpClientError>>, ServiceError> {
         if self.http_client.is_none() {
-            panic!("http is not configured");
+            return Err(ServiceError::NotConfigured("Http Client".to_string()));
         }
 
         let client = Arc::clone(&self.http_client.as_ref().unwrap());
 
-        self.available_runtime()
-            .spawn(async move { client.execute(endpoint).await })
+        Ok(self
+            .available_runtime()
+            .spawn(async move { client.execute(endpoint).await }))
+    }
+
+    pub fn read_file(
+        &self,
+        read_file: ReadFile,
+    ) -> Result<JoinHandle<Result<Vec<u8>, StorageError>>, ServiceError> {
+        if self.storage_manager.is_none() {
+            return Err(ServiceError::NotConfigured("Storage Manager".to_string()));
+        }
+
+        let storage_manager = Arc::clone(&self.storage_manager.as_ref().unwrap());
+        Ok(self
+            .available_runtime()
+            .spawn(async move { storage_manager.read(read_file).await }))
+    }
+
+    pub fn write_file(
+        &self,
+        write_file: WriteFile,
+    ) -> Result<JoinHandle<Result<(), StorageError>>, ServiceError> {
+        if self.storage_manager.is_none() {
+            return Err(ServiceError::NotConfigured("Storage Manager".to_string()));
+        }
+
+        let storage_manager = Arc::clone(&self.storage_manager.as_ref().unwrap());
+        Ok(self
+            .available_runtime()
+            .spawn(async move { storage_manager.write(write_file).await }))
     }
 
     pub fn spawn_handle(&self) -> tokio::runtime::Handle {
@@ -153,9 +194,8 @@ impl ServiceRuntime {
             let unwrapped = cookie_store.clone();
             let file_backend_cookie_store = unwrapped.downcast_arc::<FileBackedCookieStore>();
             if let Some(file_backend_cookie_store) = file_backend_cookie_store {
-                let handle = tokio_runtime.block_on(async {
-                    file_backend_cookie_store.start_auto_save()
-                });
+                let handle =
+                    tokio_runtime.block_on(async { file_backend_cookie_store.start_auto_save() });
 
                 Some(Arc::new(Mutex::new(handle)))
             } else {
@@ -202,13 +242,18 @@ impl ServiceRuntime {
         Ok(store)
     }
 
-    async fn create_http_client(
+    fn create_http_client(
         http_config: HttpConfig,
         cookie_store: Option<Arc<dyn CookieStore>>,
     ) -> Result<Arc<dyn HttpClient>, InitError> {
         let backend = ReqwestBackend::with_parameters(http_config, cookie_store)
             .map_err(|e| InitError::HttpClientInit(e.to_string()))?;
 
+        Ok(Arc::new(backend))
+    }
+
+    fn create_storage_manager() -> Result<Arc<dyn StorageManager>, InitError> {
+        let backend = AsyncStorageManager::new();
         Ok(Arc::new(backend))
     }
 }

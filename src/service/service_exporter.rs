@@ -34,13 +34,12 @@ pub fn create_service_exporter_with_tokio_runtime(
 #[cfg(test)]
 mod tests {
     use crate::domain::models::http_models::{HttpEndpoint, HttpMethod};
+    use crate::domain::models::storage_models::{ReadFile, WriteFile};
     use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
     use crate::service::service_exporter::create_service_exporter;
-    use std::hint::spin_loop;
-    use std::io;
-    use std::thread::sleep;
+    use crate::service::service_runtime::ServiceRuntime;
+    use std::sync::Arc;
     use std::time::Duration;
-    use tokio::runtime;
 
     macro_rules! await_test {
         ($e:expr) => {
@@ -48,8 +47,7 @@ mod tests {
         };
     }
 
-    #[test]
-    fn test_http() {
+    fn initialize_runtime() -> Arc<ServiceRuntime> {
         let service_exporter = create_service_exporter(RuntimeConfig {
             tokio: TokioConfig {
                 worker_threads: Some(4),
@@ -64,41 +62,70 @@ mod tests {
                 encryption_provider: None,
                 decryption_provider: None,
                 cookie_config: None,
-                all_proxy: None
+                all_proxy: None,
             }),
             cookie: Some(CookieConfig {
                 cookie_path: Some("test_cookie.json".to_string()),
                 debounce_delay: Duration::from_secs(10),
                 auto_save_interval: Some(Duration::from_secs(60)),
-                initial_cookies: None
+                initial_cookies: None,
             }),
         })
         .unwrap();
         let runtime = service_exporter.runtime;
-        let response = await_test!(runtime.execute_http(HttpEndpoint {
-            path: "/search".to_string(),
-            domain: "https://cn.bing.com".to_string(),
-            body: None,
-            timeout: Duration::from_secs(60),
-            headers: None,
-            path_params: None,
-            query_params: Some(vec![("q".to_string(), "netease".to_string())]),
-            method: HttpMethod::Get,
-            requires_encryption: false,
-            requires_decryption: false,
-            user_agent: None,
-            content_type: None
-        }))
+        runtime
+    }
+
+    #[test]
+    fn test_http() {
+        let runtime = initialize_runtime();
+        let response = await_test!(
+            runtime
+                .execute_http(HttpEndpoint {
+                    path: "/search".to_string(),
+                    domain: "https://cn.bing.com".to_string(),
+                    body: None,
+                    timeout: Duration::from_secs(60),
+                    headers: None,
+                    path_params: None,
+                    query_params: Some(vec![("q".to_string(), "netease".to_string())]),
+                    method: HttpMethod::Get,
+                    requires_encryption: false,
+                    requires_decryption: false,
+                    user_agent: None,
+                    content_type: None
+                })
+                .unwrap()
+        )
         .unwrap()
         .unwrap();
 
         println!("response length: {}", response.body.len());
 
         /// test cookie store
-        await_test!(async {
-            loop {
-                
-            }
-        });
+        await_test!(async { loop {} });
+    }
+
+    #[test]
+    fn test_storage() {
+        let runtime = initialize_runtime();
+        let path = "storage_test.txt".to_string();
+        let data = "http world, this is the storage test"
+            .to_string()
+            .into_bytes();
+
+        let _ = await_test!(
+            runtime
+                .write_file(WriteFile::path(path.clone(), data.clone()))
+                .unwrap()
+        )
+        .unwrap()
+        .unwrap();
+
+        let read_data = await_test!(runtime.read_file(ReadFile::path(path)).unwrap())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(read_data, data)
     }
 }
