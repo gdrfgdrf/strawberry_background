@@ -11,7 +11,7 @@ pub struct FfiReadFile {
 pub struct FfiWriteFile {
     pub path: String,
     pub mode: FfiWriteMode,
-    pub timeout: u64,
+    pub timeout_millis: u64,
     pub ensure_mode: Option<FfiEnsureMode>,
     pub data: Vec<u8>,
 }
@@ -26,7 +26,34 @@ pub enum FfiWriteMode {
 pub enum FfiEnsureMode {
     Flush,
     SyncData,
-    SyncAll
+    SyncAll,
+}
+
+impl FfiReadFile {
+    fn new(path: String, timeout_millis: u64) -> Self {
+        Self {
+            path,
+            timeout_millis,
+        }
+    }
+}
+
+impl FfiWriteFile {
+    fn new(
+        path: String,
+        mode: FfiWriteMode,
+        timeout_millis: u64,
+        ensure_mode: Option<FfiEnsureMode>,
+        data: Vec<u8>,
+    ) -> Self {
+        Self {
+            path,
+            mode,
+            timeout_millis,
+            ensure_mode,
+            data,
+        }
+    }
 }
 
 impl Into<WriteMode> for FfiWriteMode {
@@ -43,7 +70,7 @@ impl Into<EnsureMode> for FfiEnsureMode {
         match self {
             FfiEnsureMode::Flush => EnsureMode::Flush,
             FfiEnsureMode::SyncData => EnsureMode::SyncData,
-            FfiEnsureMode::SyncAll => EnsureMode::SyncAll
+            FfiEnsureMode::SyncAll => EnsureMode::SyncAll,
         }
     }
 }
@@ -62,7 +89,7 @@ impl Into<WriteFile> for FfiWriteFile {
         WriteFile {
             path: self.path,
             mode: self.mode.into(),
-            timeout: Duration::from_millis(self.timeout),
+            timeout: Duration::from_millis(self.timeout_millis),
             ensure_mode: self.ensure_mode.map(|ensure_mode| ensure_mode.into()),
             data: self.data,
         }
