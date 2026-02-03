@@ -30,7 +30,7 @@ pub enum FfiEnsureMode {
 }
 
 impl FfiReadFile {
-    fn new(path: String, timeout_millis: u64) -> Self {
+    pub fn new(path: String, timeout_millis: u64) -> Self {
         Self {
             path,
             timeout_millis,
@@ -39,7 +39,7 @@ impl FfiReadFile {
 }
 
 impl FfiWriteFile {
-    fn new(
+    pub fn new(
         path: String,
         mode: FfiWriteMode,
         timeout_millis: u64,
