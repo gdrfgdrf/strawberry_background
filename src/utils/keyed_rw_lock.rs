@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockReadGuard};
 
 pub struct KeyedRwLock<T> {
     locks: DashMap<String, Arc<RwLock<T>>>,
@@ -13,7 +13,7 @@ impl<T> KeyedRwLock<T> {
         }
     }
 
-    pub async fn read<F, R>(&self, id: &str, operation: F) -> Option<R>
+    pub async fn read<F, R>(&self, id: &str, operation: F) -> R
     where
         F: FnOnce(&T) -> R,
         T: Default,
@@ -23,10 +23,10 @@ impl<T> KeyedRwLock<T> {
             .entry(id.to_string())
             .or_insert_with(|| Arc::new(RwLock::new(T::default())));
         let guard = lock.value().read().await;
-        Some(operation(&guard))
+        operation(&guard)
     }
 
-    pub async fn write<F, R>(&self, id: &str, operation: F) -> Option<R>
+    pub async fn write<F, R>(&self, id: &str, operation: F) -> R
     where
         F: FnOnce(&mut T) -> R,
         T: Default,
@@ -36,7 +36,7 @@ impl<T> KeyedRwLock<T> {
             .entry(id.to_string())
             .or_insert_with(|| Arc::new(RwLock::new(T::default())));
         let mut guard = lock.value().write().await;
-        Some(operation(&mut guard))
+        operation(&mut guard)
     }
 
     pub fn free(&self, id: &str) -> Option<(String, T)> {
