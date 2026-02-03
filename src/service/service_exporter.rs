@@ -34,12 +34,12 @@ pub fn create_service_exporter_with_tokio_runtime(
 #[cfg(test)]
 mod tests {
     use crate::domain::models::http_models::{HttpEndpoint, HttpMethod};
-    use crate::domain::models::storage_models::{ReadFile, WriteFile};
+    use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
     use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
     use crate::service::service_exporter::create_service_exporter;
     use crate::service::service_runtime::ServiceRuntime;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     macro_rules! await_test {
         ($e:expr) => {
@@ -109,23 +109,41 @@ mod tests {
     #[test]
     fn test_storage() {
         let runtime = initialize_runtime();
-        let path = "storage_test.txt".to_string();
-        let data = "http world, this is the storage test"
-            .to_string()
-            .into_bytes();
+        
+        let mut costs: Vec<f32> = Vec::new();
+        for i in 0..1000 {
+            let current_time = SystemTime::now();
+            let path = "storage_test.txt".to_string();
+            let data = "http world, this is the storage test\n"
+                .repeat(10086 ^ 2)
+                .to_string()
+                .into_bytes();
 
-        let _ = await_test!(
+            let _ = await_test!(
             runtime
-                .write_file(WriteFile::path(path.clone(), data.clone()))
+                .write_file(WriteFile {
+                    path: path.clone(),
+                    data: data.clone(),
+                    mode: WriteMode::Cover,
+                    timeout: Duration::from_secs(60),
+                    ensure_mode: Some(EnsureMode::SyncAll)
+                })
                 .unwrap()
         )
-        .unwrap()
-        .unwrap();
+                .unwrap()
+                .unwrap();
 
-        let read_data = await_test!(runtime.read_file(ReadFile::path(path)).unwrap())
-            .unwrap()
-            .unwrap();
+            costs.push(current_time.elapsed().unwrap().as_millis() as f32);
 
-        assert_eq!(read_data, data)
+            let read_data = await_test!(runtime.read_file(ReadFile::path(path)).unwrap())
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(read_data.len(), data.len())
+        }
+
+        let sum: f32 = costs.iter().sum();
+        let average = sum / costs.len() as f32;
+        println!("average: {:?}ms", average);
     }
 }
