@@ -70,6 +70,7 @@ mod tests {
                 auto_save_interval: Some(Duration::from_secs(60)),
                 initial_cookies: None,
             }),
+            file_cache_config: None
         })
         .unwrap();
         let runtime = service_exporter.runtime;
@@ -110,15 +111,16 @@ mod tests {
     fn test_storage() {
         let runtime = initialize_runtime();
         
-        let mut costs: Vec<f32> = Vec::new();
+        let mut write_costs: Vec<f32> = Vec::new();
+        let mut read_costs: Vec<f32> = Vec::new();
         for i in 0..1000 {
-            let current_time = SystemTime::now();
             let path = "storage_test.txt".to_string();
             let data = "http world, this is the storage test\n"
                 .repeat(10086 ^ 2)
                 .to_string()
                 .into_bytes();
 
+            let current_time = SystemTime::now();
             let _ = await_test!(
             runtime
                 .write_file(WriteFile {
@@ -133,17 +135,24 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-            costs.push(current_time.elapsed().unwrap().as_millis() as f32);
+            write_costs.push(current_time.elapsed().unwrap().as_millis() as f32);
 
+            let current_time = SystemTime::now();
             let read_data = await_test!(runtime.read_file(ReadFile::path(path)).unwrap())
                 .unwrap()
                 .unwrap();
 
+            read_costs.push(current_time.elapsed().unwrap().as_millis() as f32);
+
             assert_eq!(read_data.len(), data.len())
         }
 
-        let sum: f32 = costs.iter().sum();
-        let average = sum / costs.len() as f32;
-        println!("average: {:?}ms", average);
+        let write_sum: f32 = write_costs.iter().sum();
+        let write_average = write_sum / write_costs.len() as f32;
+        println!("write average: {:?}ms", write_average);
+
+        let read_sum: f32 = read_costs.iter().sum();
+        let read_average = read_sum / read_costs.len() as f32;
+        println!("read average: {:?}ms", read_average);
     }
 }

@@ -2,6 +2,7 @@
   <dictionary name="project">
     <words>
       <w>reqwest</w>
+      <w>rkyv</w>
     </words>
   </dictionary>
 </component>

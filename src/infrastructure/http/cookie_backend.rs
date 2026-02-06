@@ -109,7 +109,7 @@ impl CookieStore for FileBackedCookieStore {
                 let json = serde_json::to_string_pretty(&serializable)
                     .map_err(|e| CookieError::Serialization(e.to_string()))?;
 
-                std::fs::write(path, json).map_err(|e| CookieError::Io(e.to_string()))?;
+                std::fs::write(path, json).map_err(|e| CookieError::IO(e.to_string()))?;
 
                 Ok(())
             })
@@ -128,7 +128,7 @@ impl CookieStore for FileBackedCookieStore {
 
             let json = tokio::fs::read_to_string(path)
                 .await
-                .map_err(|e| CookieError::Io(e.to_string()))?;
+                .map_err(|e| CookieError::IO(e.to_string()))?;
 
             let serializable: SerializableStore = serde_json::from_str(&json)
                 .map_err(|e| CookieError::Serialization(e.to_string()))?;

@@ -1,12 +1,18 @@
 use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpResponse};
 use crate::domain::models::storage_models::{ReadFile, StorageError, WriteFile};
 use crate::domain::traits::cookie_traits::CookieStore;
+use crate::domain::traits::file_cache_traits::FileCacheManagerFactory;
 use crate::domain::traits::http_traits::HttpClient;
 use crate::domain::traits::storage_traits::StorageManager;
+use crate::infrastructure::file_cache::file_cache_backend::{
+    DefaultFileCacheManager, SingletonFileCacheManagerFactory,
+};
 use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::infrastructure::storage::storage_backend::AsyncStorageManager;
-use crate::service::config::{CookieConfig, HttpConfig, RuntimeConfig, TokioConfig};
+use crate::service::config::{
+    CookieConfig, FileCacheConfig, HttpConfig, RuntimeConfig, TokioConfig,
+};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,6 +41,7 @@ pub struct ServiceRuntime {
     pub http_client: Option<Arc<dyn HttpClient>>,
     pub cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>>,
     pub storage_manager: Option<Arc<dyn StorageManager>>,
+    pub file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>>,
 }
 
 impl ServiceRuntime {
@@ -61,12 +68,19 @@ impl ServiceRuntime {
 
         let storage_manager = Self::create_storage_manager()?;
 
+        let mut file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>> = None;
+        if let Some(file_cache_config) = config.file_cache_config {
+            let factory = Self::create_file_cache_factory(file_cache_config)?;
+            file_cache_manager_factory = Some(factory);
+        }
+
         Ok(Arc::new(Self {
             tokio_runtime: Some(tokio_runtime),
             provided_tokio_runtime: None,
             http_client,
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
+            file_cache_manager_factory,
         }))
     }
 
@@ -94,12 +108,19 @@ impl ServiceRuntime {
 
         let storage_manager = Self::create_storage_manager()?;
 
+        let mut file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>> = None;
+        if let Some(file_cache_config) = config.file_cache_config {
+            let factory = Self::create_file_cache_factory(file_cache_config)?;
+            file_cache_manager_factory = Some(factory);
+        }
+
         Ok(Arc::new(Self {
             tokio_runtime: None,
             provided_tokio_runtime: Some(tokio_runtime),
             http_client,
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
+            file_cache_manager_factory,
         }))
     }
 
@@ -255,5 +276,30 @@ impl ServiceRuntime {
     fn create_storage_manager() -> Result<Arc<dyn StorageManager>, InitError> {
         let backend = AsyncStorageManager::new();
         Ok(Arc::new(backend))
+    }
+
+    fn create_file_cache_factory(
+        mut config: FileCacheConfig,
+    ) -> Result<Arc<dyn FileCacheManagerFactory>, InitError> {
+        let channels = config.channels.take();
+
+        let factory = SingletonFileCacheManagerFactory::new(config, |config, channel| {
+            let path = format!("{}/{}", config.base_path, channel.name);
+            let manager = DefaultFileCacheManager::new(path, config.auto_save_interval, channel);
+            Arc::new(manager)
+        });
+        let factory = Arc::new(factory);
+
+        if channels.is_some() {
+            let channels = channels.unwrap();
+            channels.into_iter().for_each(|channel_config| {
+                let name = channel_config.name;
+                let extension = channel_config.extension;
+
+                let _ = factory.create_with_name(name, extension);
+            });
+        }
+
+        Ok(factory)
     }
 }

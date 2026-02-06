@@ -1,14 +1,17 @@
 use dashmap::DashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 pub struct KeyedRwLock<T> {
+    cumulative_cleanup: AtomicI32,
     locks: DashMap<String, Arc<RwLock<T>>>,
 }
 
 impl<T> KeyedRwLock<T> {
     pub fn new() -> Self {
         Self {
+            cumulative_cleanup: AtomicI32::new(0),
             locks: DashMap::new(),
         }
     }
@@ -18,6 +21,8 @@ impl<T> KeyedRwLock<T> {
         F: FnOnce(&T) -> R,
         T: Default,
     {
+        self.cumulate_cleanup();
+
         let lock = self
             .locks
             .entry(id.to_string())
@@ -31,6 +36,8 @@ impl<T> KeyedRwLock<T> {
         F: FnOnce(&mut T) -> R,
         T: Default,
     {
+        self.cumulate_cleanup();
+
         let lock = self
             .locks
             .entry(id.to_string())
@@ -55,5 +62,13 @@ impl<T> KeyedRwLock<T> {
 
     pub fn cleanup(&self) {
         self.locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        self.cumulative_cleanup.store(0, Ordering::SeqCst);
+    }
+
+    fn cumulate_cleanup(&self) {
+        let target = self.cumulative_cleanup.fetch_add(1, Ordering::SeqCst) + 1;
+        if target >= 32 {
+            self.cleanup();
+        }
     }
 }

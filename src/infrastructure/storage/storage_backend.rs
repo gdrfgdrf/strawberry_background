@@ -4,7 +4,7 @@ use crate::domain::models::storage_models::{
 use crate::domain::traits::storage_traits::StorageManager;
 use crate::utils::keyed_rw_lock::KeyedRwLock;
 use async_trait::async_trait;
-use tokio::fs::{OpenOptions, read};
+use tokio::fs::{OpenOptions, read, try_exists};
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
@@ -33,6 +33,13 @@ impl AsyncStorageManager {
 #[async_trait]
 impl StorageManager for AsyncStorageManager {
     async fn read(&self, request: ReadFile) -> Result<Vec<u8>, StorageError> {
+        let exists = try_exists(&request.path)
+            .await
+            .map_err(|e| StorageError::IOError(e.to_string()))?;
+        if !exists {
+            return Err(StorageError::NotExist(request.path));
+        }
+
         self.keys
             .read(&request.path.clone(), |_| async {
                 match timeout(request.timeout, read(request.path)).await {

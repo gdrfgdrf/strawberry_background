@@ -36,7 +36,7 @@ pub enum CookieError {
     #[error("Serialization error: {0}")]
     Serialization(String),
     #[error("IO error: {0}")]
-    Io(String),
+    IO(String),
 }
 
 impl Cookie {

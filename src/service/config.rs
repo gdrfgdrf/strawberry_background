@@ -6,7 +6,8 @@ use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider}
 pub struct RuntimeConfig {
     pub tokio: TokioConfig,
     pub http: Option<HttpConfig>,
-    pub cookie: Option<CookieConfig>
+    pub cookie: Option<CookieConfig>,
+    pub file_cache_config: Option<FileCacheConfig>
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,19 @@ pub struct CookieConfig {
     pub initial_cookies: Option<Vec<Cookie>>
 }
 
+#[derive(Debug, Clone)]
+pub struct FileCacheConfig {
+    pub base_path: String,
+    pub auto_save_interval: Duration,
+    pub channels: Option<Vec<FileCacheChannelConfig>>
+}
+
+#[derive(Debug, Clone)]
+pub struct FileCacheChannelConfig {
+    pub name: String,
+    pub extension: Option<String>,
+}
+
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
@@ -44,7 +58,8 @@ impl Default for RuntimeConfig {
                 thread_name_prefix: None,
             },
             http: None,
-            cookie: None
+            cookie: None,
+            file_cache_config: None
         }
     }
 }

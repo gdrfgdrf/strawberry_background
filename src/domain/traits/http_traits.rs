@@ -1,6 +1,8 @@
-use std::sync::Arc;
+use crate::domain::models::http_models::{
+    HttpClientError, HttpEndpoint, HttpResponse,
+};
 use async_trait::async_trait;
-use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpResponse};
+use std::sync::Arc;
 
 #[async_trait]
 pub trait HttpClient: Send + Sync + 'static {
