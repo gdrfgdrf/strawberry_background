@@ -116,4 +116,14 @@ impl ServiceFfiAdapter {
             .map_err(|e| e.to_string())?;
         Ok(data)
     }
+
+    pub async fn file_cache_path(&self, channel: &String, tag: &String) -> Result<String, String> {
+        let data = self
+            .runtime
+            .file_cache_path(channel, tag)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(data)
+    }
 }

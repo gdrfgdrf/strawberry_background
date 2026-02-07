@@ -281,6 +281,24 @@ impl ServiceRuntime {
         Ok(cache_manager.persist().await)
     }
 
+    pub async fn file_cache_path(
+        &self,
+        channel: &String,
+        tag: &String,
+    ) -> Result<Result<String, CacheError>, ServiceError> {
+        if self.file_cache_manager_factory.is_none() {
+            return Err(ServiceError::NotConfigured("File Cache".to_string()));
+        }
+
+        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
+        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
+        if cache_manager.is_err() {
+            return Ok(cache_manager.map(|_| "".to_string()));
+        }
+        let cache_manager = cache_manager.unwrap();
+        Ok(cache_manager.path(tag).await)
+    }
+
     pub fn spawn_handle(&self) -> tokio::runtime::Handle {
         self.available_runtime().handle().clone()
     }

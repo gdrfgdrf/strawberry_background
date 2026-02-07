@@ -182,7 +182,7 @@ where
             .map_err(|e| CacheError::IO(e.to_string()))?;
         let channel = rkyv::from_bytes::<CacheChannel, Error>(&data)
             .map_err(|e| CacheError::IO(e.to_string()))?;
-        
+
         Ok(channel)
     }
 
@@ -211,7 +211,12 @@ where
 
 #[async_trait]
 impl FileCacheManager for DefaultFileCacheManager {
-    async fn cache(&self, tag: String, sentence: String, bytes: &Vec<u8>) -> Result<(), CacheError> {
+    async fn cache(
+        &self,
+        tag: String,
+        sentence: String,
+        bytes: &Vec<u8>,
+    ) -> Result<(), CacheError> {
         if self.map.contains_key(&tag) {
             let entry = self.map.get_mut(&tag).ok_or(CacheError::TagNotExist(tag))?;
             let mut record = entry
@@ -378,5 +383,26 @@ impl FileCacheManager for DefaultFileCacheManager {
             .map_err(|e| CacheError::Lock(e.to_string()))?;
         let record = record.clone();
         Ok(record)
+    }
+
+    async fn path(&self, tag: &String) -> Result<String, CacheError> {
+        let entry = self
+            .map
+            .get_mut(tag)
+            .ok_or(CacheError::TagNotExist(tag.clone()))?;
+        let record = entry
+            .try_write()
+            .map_err(|e| CacheError::Lock(e.to_string()))?;
+        let filename = &record.filename;
+        let path = self.build_path(filename);
+
+        if !try_exists(&path)
+            .await
+            .map_err(|e| CacheError::IO(e.to_string()))?
+        {
+            return Err(CacheError::FileNotExist(path));
+        }
+
+        return Ok(path);
     }
 }

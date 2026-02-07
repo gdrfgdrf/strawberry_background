@@ -33,4 +33,5 @@ pub trait FileCacheManager: Send + Sync + 'static {
     async fn persist(&self) -> Result<(), CacheError>;
 
     async fn record(&self, tag: &String) -> Result<CacheRecord, CacheError>;
+    async fn path(&self, tag: &String) -> Result<String, CacheError>;
 }
