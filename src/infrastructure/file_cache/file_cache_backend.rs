@@ -7,7 +7,7 @@ use rkyv::rancor::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::fs::{read, try_exists};
+use tokio::fs::{File, read, try_exists};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -98,6 +98,34 @@ impl DefaultFileCacheManager {
         self.dirty.load(Ordering::SeqCst)
     }
 
+    async fn ensure_directory_exist(&self, directory: &String) -> Result<(), CacheError> {
+        if !try_exists(directory)
+            .await
+            .map_err(|e| CacheError::IO(e.to_string()))?
+        {
+            return tokio::fs::create_dir_all(directory)
+                .await
+                .map_err(|e| CacheError::IO(e.to_string()));
+        }
+        Ok(())
+    }
+
+    async fn ensure_file_exist(&self, filename: &String) -> Result<(), CacheError> {
+        if !try_exists(filename)
+            .await
+            .map_err(|e| CacheError::IO(e.to_string()))?
+        {
+            let file = File::create_new(filename)
+                .await
+                .map_err(|e| CacheError::IO(e.to_string()))?;
+
+            file.sync_all()
+                .await
+                .map_err(|e| CacheError::IO(e.to_string()))?
+        }
+        Ok(())
+    }
+
     pub fn start_auto_save(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         let store = self.dirty.clone();
         tokio::spawn(async move {
@@ -154,6 +182,7 @@ where
             .map_err(|e| CacheError::IO(e.to_string()))?;
         let channel = rkyv::from_bytes::<CacheChannel, Error>(&data)
             .map_err(|e| CacheError::IO(e.to_string()))?;
+        
         Ok(channel)
     }
 
@@ -189,12 +218,11 @@ impl FileCacheManager for DefaultFileCacheManager {
                 .try_write()
                 .map_err(|e| CacheError::Lock(e.to_string()))?;
 
-            return match timeout(
-                Duration::from_secs(60),
-                tokio::fs::write(self.build_path(&record.filename), &bytes),
-            )
-            .await
-            {
+            let path = self.build_path(&record.filename);
+            self.ensure_directory_exist(&self.path).await?;
+            self.ensure_file_exist(&path).await?;
+
+            return match timeout(Duration::from_secs(60), tokio::fs::write(&path, &bytes)).await {
                 Ok(Ok(())) => {
                     record.sentence = sentence;
                     record.size = bytes.len();
@@ -208,12 +236,11 @@ impl FileCacheManager for DefaultFileCacheManager {
         }
 
         let filename = Uuid::new_v4().to_string();
-        match timeout(
-            Duration::from_secs(60),
-            tokio::fs::write(self.build_path(&filename), &bytes),
-        )
-        .await
-        {
+        let path = self.build_path(&filename);
+        self.ensure_directory_exist(&self.path).await?;
+        self.ensure_file_exist(&path).await?;
+
+        match timeout(Duration::from_secs(60), tokio::fs::write(&path, &bytes)).await {
             Ok(Ok(())) => {
                 let record = CacheRecord {
                     tag: tag.clone(),
@@ -323,6 +350,9 @@ impl FileCacheManager for DefaultFileCacheManager {
             .map_err(|e| CacheError::Serialization(e.to_string()))?;
 
         let channel_path = self.get_channel_path();
+        self.ensure_directory_exist(&self.path).await?;
+        self.ensure_file_exist(&channel_path).await?;
+
         match timeout(
             Duration::from_secs(60),
             tokio::fs::write(&channel_path, &bytes),

@@ -6,10 +6,11 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tokio::io;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock as AsyncRwLock;
+use tokio::time::timeout;
 
 pub struct FileBackedCookieStore {
     inner: AsyncRwLock<InnerStore>,
@@ -104,17 +105,18 @@ impl CookieStore for FileBackedCookieStore {
                 saved_at: SystemTime::now(),
             };
 
-            let path = path.clone();
-            tokio::task::spawn_blocking(move || {
-                let json = serde_json::to_string_pretty(&serializable)
-                    .map_err(|e| CookieError::Serialization(e.to_string()))?;
-
-                std::fs::write(path, json).map_err(|e| CookieError::IO(e.to_string()))?;
-
-                Ok(())
-            })
+            let json = serde_json::to_string_pretty(&serializable)
+                .map_err(|e| CookieError::Serialization(e.to_string()))?;
+            match timeout(
+                Duration::from_secs(60),
+                tokio::fs::write(path, json.into_bytes()),
+            )
             .await
-            .map_err(|e| CookieError::Storage(e.to_string()))?
+            {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(CookieError::IO(e.to_string())),
+                Err(e) => Err(CookieError::Timeout(e.to_string())),
+            }
         } else {
             Ok(())
         }

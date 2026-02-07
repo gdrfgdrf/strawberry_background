@@ -27,6 +27,8 @@ pub enum InitError {
     HttpClientInit(String),
     #[error("Configuration error: {0}")]
     Configuration(String),
+    #[error("File Cache initialization failed: {0}")]
+    FileCacheInit(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -67,12 +69,8 @@ impl ServiceRuntime {
         };
 
         let storage_manager = Self::create_storage_manager()?;
-
-        let mut file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>> = None;
-        if let Some(file_cache_config) = config.file_cache_config {
-            let factory = Self::create_file_cache_factory(file_cache_config)?;
-            file_cache_manager_factory = Some(factory);
-        }
+        let file_cache_manager_factory =
+            Self::initialize_file_cache(&tokio_runtime, config.file_cache_config);
 
         Ok(Arc::new(Self {
             tokio_runtime: Some(tokio_runtime),
@@ -107,12 +105,8 @@ impl ServiceRuntime {
         };
 
         let storage_manager = Self::create_storage_manager()?;
-
-        let mut file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>> = None;
-        if let Some(file_cache_config) = config.file_cache_config {
-            let factory = Self::create_file_cache_factory(file_cache_config)?;
-            file_cache_manager_factory = Some(factory);
-        }
+        let file_cache_manager_factory =
+            Self::initialize_file_cache(&tokio_runtime, config.file_cache_config);
 
         Ok(Arc::new(Self {
             tokio_runtime: None,
@@ -134,12 +128,28 @@ impl ServiceRuntime {
         panic!("no available runtime")
     }
 
-    pub fn execute_async<F, R>(&self, future: F) -> R
+    pub fn execute_block<F, R>(&self, future: F) -> R
     where
         F: Future<Output = R> + Send + 'static,
         R: Send + 'static,
     {
         self.available_runtime().block_on(future)
+    }
+
+    pub fn execute_async_blocking<F, R>(&self, func: F) -> JoinHandle<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.available_runtime().spawn_blocking(func)
+    }
+
+    pub fn execute_async<F>(&self, future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.available_runtime().spawn(future)
     }
 
     pub fn execute_http(
@@ -151,42 +161,52 @@ impl ServiceRuntime {
         }
 
         let client = Arc::clone(&self.http_client.as_ref().unwrap());
-
-        Ok(self
-            .available_runtime()
-            .spawn(async move { client.execute(endpoint).await }))
+        Ok(self.execute_async(async move { client.execute(endpoint).await }))
     }
 
-    pub fn read_file(
+    pub async fn read_file(
         &self,
         read_file: ReadFile,
-    ) -> Result<JoinHandle<Result<Vec<u8>, StorageError>>, ServiceError> {
+    ) -> Result<Result<Vec<u8>, StorageError>, ServiceError> {
         if self.storage_manager.is_none() {
             return Err(ServiceError::NotConfigured("Storage Manager".to_string()));
         }
 
         let storage_manager = Arc::clone(&self.storage_manager.as_ref().unwrap());
-        Ok(self
-            .available_runtime()
-            .spawn(async move { storage_manager.read(read_file).await }))
+        Ok(storage_manager.read(read_file).await)
     }
 
-    pub fn write_file(
+    pub async fn write_file(
         &self,
         write_file: WriteFile,
-    ) -> Result<JoinHandle<Result<(), StorageError>>, ServiceError> {
+    ) -> Result<Result<(), StorageError>, ServiceError> {
         if self.storage_manager.is_none() {
             return Err(ServiceError::NotConfigured("Storage Manager".to_string()));
         }
 
         let storage_manager = Arc::clone(&self.storage_manager.as_ref().unwrap());
-        Ok(self
-            .available_runtime()
-            .spawn(async move { storage_manager.write(write_file).await }))
+        Ok(storage_manager.write(write_file).await)
     }
 
     pub fn spawn_handle(&self) -> tokio::runtime::Handle {
         self.available_runtime().handle().clone()
+    }
+
+    fn initialize_file_cache(
+        tokio_runtime: &Runtime,
+        config: Option<FileCacheConfig>,
+    ) -> Option<Arc<dyn FileCacheManagerFactory>> {
+        if config.is_none() {
+            return None;
+        }
+        let config = config.unwrap();
+        let factory =
+            tokio_runtime.block_on(async { Self::create_file_cache_factory(config).await });
+        if factory.is_err() {
+            return None;
+        }
+
+        Some(factory.unwrap())
     }
 
     fn initialize_cookie_store(
@@ -278,7 +298,7 @@ impl ServiceRuntime {
         Ok(Arc::new(backend))
     }
 
-    fn create_file_cache_factory(
+    async fn create_file_cache_factory(
         mut config: FileCacheConfig,
     ) -> Result<Arc<dyn FileCacheManagerFactory>, InitError> {
         let channels = config.channels.take();
@@ -286,18 +306,24 @@ impl ServiceRuntime {
         let factory = SingletonFileCacheManagerFactory::new(config, |config, channel| {
             let path = format!("{}/{}", config.base_path, channel.name);
             let manager = DefaultFileCacheManager::new(path, config.auto_save_interval, channel);
-            Arc::new(manager)
+            let manager = Arc::new(manager);
+
+            let _ = manager.clone().start_auto_save();
+            manager
         });
         let factory = Arc::new(factory);
 
         if channels.is_some() {
             let channels = channels.unwrap();
-            channels.into_iter().for_each(|channel_config| {
+            for channel_config in channels {
                 let name = channel_config.name;
                 let extension = channel_config.extension;
 
-                let _ = factory.create_with_name(name, extension);
-            });
+                let _ = factory
+                    .create_with_name(name, extension)
+                    .await
+                    .map_err(|e| InitError::FileCacheInit(e.to_string()))?;
+            }
         }
 
         Ok(factory)

@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{RwLock};
 
 pub struct KeyedRwLock<T> {
     cumulative_cleanup: AtomicI32,

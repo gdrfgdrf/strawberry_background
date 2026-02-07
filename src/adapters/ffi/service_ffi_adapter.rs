@@ -33,7 +33,6 @@ impl ServiceFfiAdapter {
         let data = self
             .runtime
             .read_file(domain_read_file)
-            .map_err(|e| e.to_string())?
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
@@ -46,7 +45,6 @@ impl ServiceFfiAdapter {
         let data = self
             .runtime
             .write_file(domain_write_file)
-            .map_err(|e| e.to_string())?
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
