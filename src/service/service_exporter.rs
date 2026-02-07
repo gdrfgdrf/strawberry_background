@@ -185,7 +185,7 @@ mod tests {
         let _ = await_test!(channel1.cache(
             "test-tag".to_string(),
             "test-sentence".to_string(),
-            data.clone()
+            &data
         ))
         .unwrap();
         let fetched = await_test!(channel1.fetch(&"test-tag".to_string())).unwrap();
@@ -208,7 +208,7 @@ mod tests {
         let _ = await_test!(channel2.cache(
             "test-tag".to_string(),
             "test-sentence".to_string(),
-            data.clone()
+            &data
         ))
         .unwrap();
         let fetched = await_test!(channel2.fetch(&"test-tag".to_string())).unwrap();
@@ -231,7 +231,7 @@ mod tests {
         let _ = await_test!(channel1.cache(
             "test-tag".to_string(),
             "test-sentence".to_string(),
-            data.clone()
+            &data
         ))
         .unwrap();
 
@@ -262,7 +262,7 @@ mod tests {
                 let _ = await_test!(channel1.cache(
                     format!("test-tag-{}", i),
                     format!("test-sentence-{}", i),
-                    data.clone()
+                    &data
                 ))
                 .unwrap();
 
@@ -305,7 +305,7 @@ mod tests {
             let _ = await_test!(channel1.cache(
                 format!("test-tag-auto-save-{}", 0),
                 format!("test-sentence-auto-save-{}", 0),
-                data.clone()
+                &data
             ))
             .unwrap();
 

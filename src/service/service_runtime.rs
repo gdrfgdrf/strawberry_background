@@ -1,3 +1,4 @@
+use crate::domain::models::file_cache_models::CacheError;
 use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpResponse};
 use crate::domain::models::storage_models::{ReadFile, StorageError, WriteFile};
 use crate::domain::traits::cookie_traits::CookieStore;
@@ -160,7 +161,7 @@ impl ServiceRuntime {
             return Err(ServiceError::NotConfigured("Http Client".to_string()));
         }
 
-        let client = Arc::clone(&self.http_client.as_ref().unwrap());
+        let client = self.http_client.as_ref().unwrap().clone();
         Ok(self.execute_async(async move { client.execute(endpoint).await }))
     }
 
@@ -172,7 +173,7 @@ impl ServiceRuntime {
             return Err(ServiceError::NotConfigured("Storage Manager".to_string()));
         }
 
-        let storage_manager = Arc::clone(&self.storage_manager.as_ref().unwrap());
+        let storage_manager = self.storage_manager.as_ref().unwrap();
         Ok(storage_manager.read(read_file).await)
     }
 
@@ -184,8 +185,100 @@ impl ServiceRuntime {
             return Err(ServiceError::NotConfigured("Storage Manager".to_string()));
         }
 
-        let storage_manager = Arc::clone(&self.storage_manager.as_ref().unwrap());
+        let storage_manager = self.storage_manager.as_ref().unwrap();
         Ok(storage_manager.write(write_file).await)
+    }
+
+    pub async fn file_cache_cache(
+        &self,
+        channel: &String,
+        tag: String,
+        sentence: String,
+        bytes: &Vec<u8>,
+    ) -> Result<Result<(), CacheError>, ServiceError> {
+        if self.file_cache_manager_factory.is_none() {
+            return Err(ServiceError::NotConfigured("File Cache".to_string()));
+        }
+
+        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
+        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
+        if cache_manager.is_err() {
+            return Ok(cache_manager.map(|_| ()));
+        }
+        let cache_manager = cache_manager.unwrap();
+        Ok(cache_manager.cache(tag, sentence, bytes).await)
+    }
+
+    pub async fn file_cache_should_update(
+        &self,
+        channel: &String,
+        tag: &String,
+        sentence: &String,
+    ) -> Result<Result<bool, CacheError>, ServiceError> {
+        if self.file_cache_manager_factory.is_none() {
+            return Err(ServiceError::NotConfigured("File Cache".to_string()));
+        }
+
+        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
+        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
+        if cache_manager.is_err() {
+            return Ok(cache_manager.map(|_| false));
+        }
+        let cache_manager = cache_manager.unwrap();
+        Ok(cache_manager.should_update(tag, sentence).await)
+    }
+
+    pub async fn file_cache_fetch(
+        &self,
+        channel: &String,
+        tag: &String,
+    ) -> Result<Result<Vec<u8>, CacheError>, ServiceError> {
+        if self.file_cache_manager_factory.is_none() {
+            return Err(ServiceError::NotConfigured("File Cache".to_string()));
+        }
+
+        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
+        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
+        if cache_manager.is_err() {
+            return Ok(cache_manager.map(|_| vec![]));
+        }
+        let cache_manager = cache_manager.unwrap();
+        Ok(cache_manager.fetch(tag).await)
+    }
+
+    pub async fn file_cache_flush(
+        &self,
+        channel: &String,
+        tag: &String,
+    ) -> Result<Result<(), CacheError>, ServiceError> {
+        if self.file_cache_manager_factory.is_none() {
+            return Err(ServiceError::NotConfigured("File Cache".to_string()));
+        }
+
+        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
+        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
+        if cache_manager.is_err() {
+            return Ok(cache_manager.map(|_| ()));
+        }
+        let cache_manager = cache_manager.unwrap();
+        Ok(cache_manager.flush(tag).await)
+    }
+
+    pub async fn file_cache_persist(
+        &self,
+        channel: &String,
+    ) -> Result<Result<(), CacheError>, ServiceError> {
+        if self.file_cache_manager_factory.is_none() {
+            return Err(ServiceError::NotConfigured("File Cache".to_string()));
+        }
+
+        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
+        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
+        if cache_manager.is_err() {
+            return Ok(cache_manager.map(|_| ()));
+        }
+        let cache_manager = cache_manager.unwrap();
+        Ok(cache_manager.persist().await)
     }
 
     pub fn spawn_handle(&self) -> tokio::runtime::Handle {

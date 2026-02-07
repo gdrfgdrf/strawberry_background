@@ -51,4 +51,69 @@ impl ServiceFfiAdapter {
 
         Ok(data)
     }
+
+    pub async fn file_cache_cache(
+        &self,
+        channel: &String,
+        tag: String,
+        sentence: String,
+        bytes: &Vec<u8>,
+    ) -> Result<(), String> {
+        let data = self
+            .runtime
+            .file_cache_cache(channel, tag, sentence, bytes)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(data)
+    }
+
+    pub async fn file_cache_should_update(
+        &self,
+        channel: &String,
+        tag: &String,
+        sentence: &String,
+    ) -> Result<bool, String> {
+        let data = self
+            .runtime
+            .file_cache_should_update(channel, tag, sentence)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(data)
+    }
+
+    pub async fn file_cache_fetch(
+        &self,
+        channel: &String,
+        tag: &String,
+    ) -> Result<Vec<u8>, String> {
+        let data = self
+            .runtime
+            .file_cache_fetch(channel, tag)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(data)
+    }
+
+    pub async fn file_cache_flush(&self, channel: &String, tag: &String) -> Result<(), String> {
+        let data = self
+            .runtime
+            .file_cache_flush(channel, tag)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(data)
+    }
+
+    pub async fn file_cache_persist(&self, channel: &String) -> Result<(), String> {
+        let data = self
+            .runtime
+            .file_cache_persist(channel)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(data)
+    }
 }

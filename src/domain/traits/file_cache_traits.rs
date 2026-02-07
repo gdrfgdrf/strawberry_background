@@ -26,7 +26,7 @@ pub trait FileCacheManagerFactory: Send + Sync + 'static {
 
 #[async_trait]
 pub trait FileCacheManager: Send + Sync + 'static {
-    async fn cache(&self, tag: String, sentence: String, bytes: Vec<u8>) -> Result<(), CacheError>;
+    async fn cache(&self, tag: String, sentence: String, bytes: &Vec<u8>) -> Result<(), CacheError>;
     async fn should_update(&self, tag: &String, sentence: &String) -> Result<bool, CacheError>;
     async fn fetch(&self, tag: &String) -> Result<Vec<u8>, CacheError>;
     async fn flush(&self, tag: &String) -> Result<(), CacheError>;

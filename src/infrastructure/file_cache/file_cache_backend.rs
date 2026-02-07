@@ -211,7 +211,7 @@ where
 
 #[async_trait]
 impl FileCacheManager for DefaultFileCacheManager {
-    async fn cache(&self, tag: String, sentence: String, bytes: Vec<u8>) -> Result<(), CacheError> {
+    async fn cache(&self, tag: String, sentence: String, bytes: &Vec<u8>) -> Result<(), CacheError> {
         if self.map.contains_key(&tag) {
             let entry = self.map.get_mut(&tag).ok_or(CacheError::TagNotExist(tag))?;
             let mut record = entry
