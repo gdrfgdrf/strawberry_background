@@ -273,7 +273,7 @@ impl FileCacheManager for DefaultFileCacheManager {
             .try_write()
             .map_err(|e| CacheError::Lock(e.to_string()))?;
         let filename = &record.filename;
-        if !try_exists(filename)
+        if !try_exists(self.build_path(filename))
             .await
             .map_err(|e| CacheError::IO(e.to_string()))?
         {
