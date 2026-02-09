@@ -31,4 +31,6 @@ pub enum CacheError {
     Serialization(String),
     #[error("Timeout: {0}")]
     Timeout(String),
+    #[error("Error Forwarding: {0}")]
+    ErrorForward(String)
 }

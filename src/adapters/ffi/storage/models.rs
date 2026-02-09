@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
 use std::time::Duration;
 
@@ -8,12 +9,12 @@ pub struct FfiReadFile {
 }
 
 #[derive(Clone)]
-pub struct FfiWriteFile {
+pub struct FfiWriteFile<'a> {
     pub path: String,
     pub mode: FfiWriteMode,
     pub timeout_millis: u64,
     pub ensure_mode: Option<FfiEnsureMode>,
-    pub data: Vec<u8>,
+    pub data: &'a Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -38,13 +39,13 @@ impl FfiReadFile {
     }
 }
 
-impl FfiWriteFile {
+impl<'a> FfiWriteFile<'a> {
     pub fn new(
         path: String,
         mode: FfiWriteMode,
         timeout_millis: u64,
         ensure_mode: Option<FfiEnsureMode>,
-        data: Vec<u8>,
+        data: &'a Vec<u8>,
     ) -> Self {
         Self {
             path,
@@ -84,8 +85,8 @@ impl Into<ReadFile> for FfiReadFile {
     }
 }
 
-impl Into<WriteFile> for FfiWriteFile {
-    fn into(self) -> WriteFile {
+impl<'a> Into<WriteFile<'a>> for FfiWriteFile<'a> {
+    fn into(self) -> WriteFile<'a> {
         WriteFile {
             path: self.path,
             mode: self.mode.into(),

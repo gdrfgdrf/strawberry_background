@@ -52,7 +52,7 @@ impl StorageManager for AsyncStorageManager {
             .await
     }
 
-    async fn write(&self, request: WriteFile) -> Result<(), StorageError> {
+    async fn write<'a>(&self, request: WriteFile<'a>) -> Result<(), StorageError> {
         self.keys
             .write(&request.path.clone(), |_| async {
                 let mut file = OpenOptions::new()
@@ -63,7 +63,7 @@ impl StorageManager for AsyncStorageManager {
                     .await
                     .map_err(|e| StorageError::IOError(e.to_string()))?;
 
-                return match timeout(request.timeout, file.write_all(&request.data)).await {
+                return match timeout(request.timeout, file.write_all(request.data)).await {
                     Ok(Ok(())) => {
                         if request.ensure_mode.is_some() {
                             return match request.ensure_mode.unwrap() {

@@ -1,5 +1,7 @@
 use crate::domain::models::file_cache_models::{CacheChannel, CacheError, CacheRecord};
+use crate::domain::models::storage_models::{ReadFile, WriteFile, WriteMode};
 use crate::domain::traits::file_cache_traits::{FileCacheManager, FileCacheManagerFactory};
+use crate::domain::traits::storage_traits::StorageManager;
 use crate::service::config::FileCacheConfig;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -7,18 +9,18 @@ use rkyv::rancor::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::fs::{File, read, try_exists};
+use tokio::fs::{File, try_exists};
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::timeout;
 use uuid::Uuid;
 
 pub struct SingletonFileCacheManagerFactory<T>
 where
-    T: Fn(&FileCacheConfig, CacheChannel) -> Arc<dyn FileCacheManager>,
+    T: Fn(&FileCacheConfig, CacheChannel, Arc<dyn StorageManager>) -> Arc<dyn FileCacheManager>,
 {
     pub config: FileCacheConfig,
     map: DashMap<String, Arc<dyn FileCacheManager>>,
     creator: T,
+    storage_manager: Arc<dyn StorageManager>,
 }
 
 pub struct DefaultFileCacheManager {
@@ -29,17 +31,23 @@ pub struct DefaultFileCacheManager {
     auto_save_interval: Duration,
     dirty: Arc<AtomicBool>,
     map: DashMap<String, RwLock<CacheRecord>>,
+    storage_manager: Arc<dyn StorageManager>,
 }
 
 impl<T> SingletonFileCacheManagerFactory<T>
 where
-    T: Fn(&FileCacheConfig, CacheChannel) -> Arc<dyn FileCacheManager>,
+    T: Fn(&FileCacheConfig, CacheChannel, Arc<dyn StorageManager>) -> Arc<dyn FileCacheManager>,
 {
-    pub fn new(config: FileCacheConfig, creator: T) -> Self {
+    pub fn new(
+        config: FileCacheConfig,
+        storage_manager: Arc<dyn StorageManager>,
+        creator: T,
+    ) -> Self {
         Self {
             config,
             map: DashMap::new(),
             creator,
+            storage_manager,
         }
     }
 
@@ -49,7 +57,12 @@ where
 }
 
 impl DefaultFileCacheManager {
-    pub fn new(path: String, auto_save_interval: Duration, channel: CacheChannel) -> Self {
+    pub fn new(
+        path: String,
+        auto_save_interval: Duration,
+        channel: CacheChannel,
+        storage_manager: Arc<dyn StorageManager>,
+    ) -> Self {
         let records = channel.records;
         let map: DashMap<String, RwLock<CacheRecord>> = DashMap::new();
 
@@ -66,6 +79,7 @@ impl DefaultFileCacheManager {
             auto_save_interval,
             dirty: Arc::new(AtomicBool::new(false)),
             map,
+            storage_manager,
         }
     }
 
@@ -145,7 +159,10 @@ impl DefaultFileCacheManager {
 #[async_trait]
 impl<T> FileCacheManagerFactory for SingletonFileCacheManagerFactory<T>
 where
-    T: Fn(&FileCacheConfig, CacheChannel) -> Arc<dyn FileCacheManager> + Send + Sync + 'static,
+    T: Fn(&FileCacheConfig, CacheChannel, Arc<dyn StorageManager>) -> Arc<dyn FileCacheManager>
+        + Send
+        + Sync
+        + 'static,
 {
     async fn create_with_name(
         &self,
@@ -177,9 +194,8 @@ where
             return Ok(channel);
         }
 
-        let data = read(&channel_path)
-            .await
-            .map_err(|e| CacheError::IO(e.to_string()))?;
+        let read_file = ReadFile::path(channel_path);
+        let data = self.storage_manager.read(read_file).await?;
         let channel = rkyv::from_bytes::<CacheChannel, Error>(&data)
             .map_err(|e| CacheError::IO(e.to_string()))?;
 
@@ -194,7 +210,7 @@ where
         if self.map.contains_key(&name) {
             return Ok(self.map.get(&name).unwrap().clone());
         }
-        let manager = (self.creator)(&self.config, channel);
+        let manager = (self.creator)(&self.config, channel, self.storage_manager.clone());
         self.map.insert(name, manager.clone());
 
         Ok(manager)
@@ -227,17 +243,24 @@ impl FileCacheManager for DefaultFileCacheManager {
             self.ensure_directory_exist(&self.path).await?;
             self.ensure_file_exist(&path).await?;
 
-            return match timeout(Duration::from_secs(60), tokio::fs::write(&path, &bytes)).await {
-                Ok(Ok(())) => {
+            let write_file = WriteFile {
+                path,
+                mode: WriteMode::Cover,
+                timeout: Duration::from_secs(60),
+                ensure_mode: None,
+                data: bytes,
+            };
+
+            return self
+                .storage_manager
+                .write(write_file)
+                .await
+                .inspect(|_| {
                     record.sentence = sentence;
                     record.size = bytes.len();
                     self.make_dirty();
-
-                    Ok(())
-                }
-                Ok(Err(e)) => Err(CacheError::IO(e.to_string())),
-                Err(e) => Err(CacheError::Timeout(e.to_string())),
-            };
+                })
+                .map_err(|e| CacheError::from(e));
         }
 
         let filename = Uuid::new_v4().to_string();
@@ -245,8 +268,18 @@ impl FileCacheManager for DefaultFileCacheManager {
         self.ensure_directory_exist(&self.path).await?;
         self.ensure_file_exist(&path).await?;
 
-        match timeout(Duration::from_secs(60), tokio::fs::write(&path, &bytes)).await {
-            Ok(Ok(())) => {
+        let write_file = WriteFile {
+            path,
+            mode: WriteMode::Cover,
+            timeout: Duration::from_secs(60),
+            ensure_mode: None,
+            data: bytes,
+        };
+
+        self.storage_manager
+            .write(write_file)
+            .await
+            .inspect(|_| {
                 let record = CacheRecord {
                     tag: tag.clone(),
                     filename,
@@ -256,12 +289,8 @@ impl FileCacheManager for DefaultFileCacheManager {
 
                 self.map.insert(tag, RwLock::new(record));
                 self.make_dirty();
-
-                Ok(())
-            }
-            Ok(Err(e)) => Err(CacheError::IO(e.to_string())),
-            Err(e) => Err(CacheError::Timeout(e.to_string())),
-        }
+            })
+            .map_err(|e| CacheError::from(e))
     }
 
     async fn should_update(&self, tag: &String, sentence: &String) -> Result<bool, CacheError> {
@@ -301,11 +330,11 @@ impl FileCacheManager for DefaultFileCacheManager {
             return Err(CacheError::FileNotExist(path));
         }
 
-        match timeout(Duration::from_secs(60), read(&path)).await {
-            Ok(Ok(data)) => Ok(data),
-            Ok(Err(e)) => Err(CacheError::IO(e.to_string())),
-            Err(e) => Err(CacheError::Timeout(e.to_string())),
-        }
+        let read_file = ReadFile::path(path);
+        self.storage_manager
+            .read(read_file)
+            .await
+            .map_err(|e| CacheError::from(e))
     }
 
     async fn flush(&self, tag: &String) -> Result<(), CacheError> {
@@ -352,25 +381,21 @@ impl FileCacheManager for DefaultFileCacheManager {
         };
 
         let bytes = rkyv::to_bytes::<Error>(&channel)
-            .map_err(|e| CacheError::Serialization(e.to_string()))?;
+            .map_err(|e| CacheError::Serialization(e.to_string()))?
+            .into_vec();
 
         let channel_path = self.get_channel_path();
         self.ensure_directory_exist(&self.path).await?;
         self.ensure_file_exist(&channel_path).await?;
 
-        match timeout(
-            Duration::from_secs(60),
-            tokio::fs::write(&channel_path, &bytes),
-        )
-        .await
-        {
-            Ok(Ok(())) => {
+        let write_file = WriteFile::path(channel_path, &bytes);
+        self.storage_manager
+            .write(write_file)
+            .await
+            .map_err(|e| CacheError::from(e))
+            .inspect(|_| {
                 self.make_clean();
-                Ok(())
-            }
-            Ok(Err(e)) => Err(CacheError::IO(e.to_string())),
-            Err(e) => Err(CacheError::Timeout(e.to_string())),
-        }
+            })
     }
 
     async fn record(&self, tag: &String) -> Result<CacheRecord, CacheError> {
@@ -403,6 +428,6 @@ impl FileCacheManager for DefaultFileCacheManager {
             return Err(CacheError::FileNotExist(path));
         }
 
-        return Ok(path);
+        Ok(path)
     }
 }

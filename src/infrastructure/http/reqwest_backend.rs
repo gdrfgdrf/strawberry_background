@@ -194,11 +194,13 @@ impl HttpClient for ReqwestBackend {
         }
 
         if endpoint.body.is_some() {
-            let mut body = endpoint.body.unwrap();
+            let body = endpoint.body.unwrap();
             if endpoint.requires_encryption {
-                body = self.encryption_provider.as_ref().unwrap().encrypt(body)?;
+                let body = self.encryption_provider.as_ref().unwrap().encrypt(&body)?;
+                request_builder = request_builder.body(body);
+            } else {
+                request_builder = request_builder.body(body);
             }
-            request_builder = request_builder.body(body);
         }
 
         if let Some(cookie_store) = &self.cookie_store {
@@ -237,7 +239,7 @@ impl HttpClient for ReqwestBackend {
             .to_vec();
 
         if endpoint.requires_decryption {
-            body = self.decryption_provider.as_ref().unwrap().decrypt(body)?;
+            body = self.decryption_provider.as_ref().unwrap().decrypt(&body)?;
         }
 
         Ok(HttpResponse {

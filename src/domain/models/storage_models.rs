@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct ReadFile {
@@ -5,12 +6,12 @@ pub struct ReadFile {
     pub timeout: Duration,
 }
 
-pub struct WriteFile {
+pub struct WriteFile<'a> {
     pub path: String,
     pub mode: WriteMode,
     pub timeout: Duration,
     pub ensure_mode: Option<EnsureMode>,
-    pub data: Vec<u8>,
+    pub data: &'a Vec<u8>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,8 +50,8 @@ impl ReadFile {
     }
 }
 
-impl WriteFile {
-    pub fn path(path: String, data: Vec<u8>) -> Self {
+impl<'a> WriteFile<'a> {
+    pub fn path(path: String, data: &'a Vec<u8>) -> Self {
         Self {
             path,
             mode: WriteMode::Cover,

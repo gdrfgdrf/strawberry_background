@@ -141,7 +141,7 @@ mod tests {
             let current_time = SystemTime::now();
             let _ = await_test!(runtime.write_file(WriteFile {
                 path: path.clone(),
-                data: data.clone(),
+                data: &data,
                 mode: WriteMode::Cover,
                 timeout: Duration::from_secs(60),
                 ensure_mode: Some(EnsureMode::SyncAll)

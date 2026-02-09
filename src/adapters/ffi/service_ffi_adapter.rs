@@ -40,7 +40,7 @@ impl ServiceFfiAdapter {
         Ok(data)
     }
 
-    pub async fn write_file(&self, ffi_write_file: FfiWriteFile) -> Result<(), String> {
+    pub async fn write_file(&self, ffi_write_file: FfiWriteFile<'_>) -> Result<(), String> {
         let domain_write_file = ffi_write_file.into();
         let data = self
             .runtime

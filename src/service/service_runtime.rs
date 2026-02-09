@@ -5,14 +5,14 @@ use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::file_cache_traits::FileCacheManagerFactory;
 use crate::domain::traits::http_traits::HttpClient;
 use crate::domain::traits::storage_traits::StorageManager;
-use crate::infrastructure::file_cache::file_cache_backend::{
-    DefaultFileCacheManager, SingletonFileCacheManagerFactory,
-};
 use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::infrastructure::storage::storage_backend::AsyncStorageManager;
 use crate::service::config::{
     CookieConfig, FileCacheConfig, HttpConfig, RuntimeConfig, TokioConfig,
+};
+use crate::superstructure::file_cache_backend::{
+    DefaultFileCacheManager, SingletonFileCacheManagerFactory,
 };
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -70,8 +70,11 @@ impl ServiceRuntime {
         };
 
         let storage_manager = Self::create_storage_manager()?;
-        let file_cache_manager_factory =
-            Self::initialize_file_cache(&tokio_runtime, config.file_cache_config);
+        let file_cache_manager_factory = Self::initialize_file_cache(
+            &tokio_runtime,
+            config.file_cache_config,
+            storage_manager.clone(),
+        );
 
         Ok(Arc::new(Self {
             tokio_runtime: Some(tokio_runtime),
@@ -106,8 +109,11 @@ impl ServiceRuntime {
         };
 
         let storage_manager = Self::create_storage_manager()?;
-        let file_cache_manager_factory =
-            Self::initialize_file_cache(&tokio_runtime, config.file_cache_config);
+        let file_cache_manager_factory = Self::initialize_file_cache(
+            &tokio_runtime,
+            config.file_cache_config,
+            storage_manager.clone(),
+        );
 
         Ok(Arc::new(Self {
             tokio_runtime: None,
@@ -177,9 +183,9 @@ impl ServiceRuntime {
         Ok(storage_manager.read(read_file).await)
     }
 
-    pub async fn write_file(
+    pub async fn write_file<'a>(
         &self,
-        write_file: WriteFile,
+        write_file: WriteFile<'a>,
     ) -> Result<Result<(), StorageError>, ServiceError> {
         if self.storage_manager.is_none() {
             return Err(ServiceError::NotConfigured("Storage Manager".to_string()));
@@ -306,13 +312,15 @@ impl ServiceRuntime {
     fn initialize_file_cache(
         tokio_runtime: &Runtime,
         config: Option<FileCacheConfig>,
+        storage_manager: Arc<dyn StorageManager>,
     ) -> Option<Arc<dyn FileCacheManagerFactory>> {
         if config.is_none() {
             return None;
         }
         let config = config.unwrap();
-        let factory =
-            tokio_runtime.block_on(async { Self::create_file_cache_factory(config).await });
+        let factory = tokio_runtime.block_on(async {
+            Self::create_file_cache_factory(config, storage_manager).await
+        });
         if factory.is_err() {
             return None;
         }
@@ -411,17 +419,27 @@ impl ServiceRuntime {
 
     async fn create_file_cache_factory(
         mut config: FileCacheConfig,
+        storage_manager: Arc<dyn StorageManager>,
     ) -> Result<Arc<dyn FileCacheManagerFactory>, InitError> {
         let channels = config.channels.take();
 
-        let factory = SingletonFileCacheManagerFactory::new(config, |config, channel| {
-            let path = format!("{}/{}", config.base_path, channel.name);
-            let manager = DefaultFileCacheManager::new(path, config.auto_save_interval, channel);
-            let manager = Arc::new(manager);
+        let factory = SingletonFileCacheManagerFactory::new(
+            config,
+            storage_manager,
+            |config, channel, storage_manager| {
+                let path = format!("{}/{}", config.base_path, channel.name);
+                let manager = DefaultFileCacheManager::new(
+                    path,
+                    config.auto_save_interval,
+                    channel,
+                    storage_manager,
+                );
+                let manager = Arc::new(manager);
 
-            let _ = manager.clone().start_auto_save();
-            manager
-        });
+                let _ = manager.clone().start_auto_save();
+                manager
+            },
+        );
         let factory = Arc::new(factory);
 
         if channels.is_some() {
