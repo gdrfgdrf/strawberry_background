@@ -72,8 +72,14 @@ impl ReqwestBackend {
         &self,
         url: &str,
         request_builder: reqwest::RequestBuilder,
-        cookie_store: &Arc<dyn CookieStore>,
     ) -> Result<reqwest::RequestBuilder, HttpClientError> {
+        let cookie_store = self.cookie_store.as_ref();
+        if cookie_store.is_none() {
+            return Err(HttpClientError::Configuration(
+                "Cookie Store is not configured".to_string(),
+            ));
+        }
+        let cookie_store = cookie_store.unwrap();
         let cookies = cookie_store.get_for_url(url).await;
         if cookies.is_empty() {
             return Ok(request_builder);
@@ -92,12 +98,16 @@ impl ReqwestBackend {
         ))
     }
 
-    async fn extract_cookies(
-        &self,
-        response: &reqwest::Response,
-        cookie_store: &Arc<dyn CookieStore>,
-    ) -> Result<(), HttpClientError> {
+    async fn extract_cookies(&self, response: &reqwest::Response) -> Result<(), HttpClientError> {
         if let Some(url) = response.url().host_str() {
+            let cookie_store = self.cookie_store.as_ref();
+            if cookie_store.is_none() {
+                return Err(HttpClientError::Configuration(
+                    "Cookie Store is not configured".to_string(),
+                ));
+            }
+            let cookie_store = cookie_store.unwrap();
+
             for cookie in response.cookies() {
                 let name = cookie.name();
                 let value = cookie.value();
@@ -202,11 +212,9 @@ impl HttpClient for ReqwestBackend {
                 request_builder = request_builder.body(body);
             }
         }
-
-        if let Some(cookie_store) = &self.cookie_store {
-            request_builder = self
-                .inject_cookies(&url, request_builder, cookie_store)
-                .await?;
+        
+        if self.cookie_store.as_ref().is_some() {
+            request_builder = self.inject_cookies(&url, request_builder).await?;
         }
 
         let response = request_builder
@@ -220,9 +228,9 @@ impl HttpClient for ReqwestBackend {
                     HttpClientError::Network(e.to_string())
                 }
             })?;
-
-        if let Some(cookie_store) = &self.cookie_store {
-            let _ = self.extract_cookies(&response, cookie_store).await;
+        
+        if self.cookie_store.as_ref().is_some() {
+            let _ = self.extract_cookies(&response).await;
         }
 
         let status = response.status().as_u16();

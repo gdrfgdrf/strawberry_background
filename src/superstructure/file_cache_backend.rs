@@ -65,7 +65,6 @@ impl DefaultFileCacheManager {
     ) -> Self {
         let records = channel.records;
         let map: DashMap<String, RwLock<CacheRecord>> = DashMap::new();
-
         records.into_iter().for_each(|record| {
             let tag = record.tag.clone();
             map.insert(tag, RwLock::new(record));
