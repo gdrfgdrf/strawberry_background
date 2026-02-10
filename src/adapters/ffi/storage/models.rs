@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -9,12 +9,12 @@ pub struct FfiReadFile {
 }
 
 #[derive(Clone)]
-pub struct FfiWriteFile<'a> {
+pub struct FfiWriteFile {
     pub path: String,
     pub mode: FfiWriteMode,
     pub timeout_millis: u64,
     pub ensure_mode: Option<FfiEnsureMode>,
-    pub data: &'a Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -39,13 +39,13 @@ impl FfiReadFile {
     }
 }
 
-impl<'a> FfiWriteFile<'a> {
+impl FfiWriteFile {
     pub fn new(
         path: String,
         mode: FfiWriteMode,
         timeout_millis: u64,
         ensure_mode: Option<FfiEnsureMode>,
-        data: &'a Vec<u8>,
+        data: Vec<u8>,
     ) -> Self {
         Self {
             path,
@@ -85,14 +85,17 @@ impl Into<ReadFile> for FfiReadFile {
     }
 }
 
-impl<'a> Into<WriteFile<'a>> for FfiWriteFile<'a> {
-    fn into(self) -> WriteFile<'a> {
+impl<'a> From<&'a FfiWriteFile> for WriteFile<'a> {
+    fn from(value: &'a FfiWriteFile) -> Self {
         WriteFile {
-            path: self.path,
-            mode: self.mode.into(),
-            timeout: Duration::from_millis(self.timeout_millis),
-            ensure_mode: self.ensure_mode.map(|ensure_mode| ensure_mode.into()),
-            data: self.data,
+            path: value.path.clone(),
+            mode: value.clone().mode.into(),
+            timeout: Duration::from_millis(value.timeout_millis),
+            ensure_mode: value
+                .clone()
+                .ensure_mode
+                .map(|ensure_mode| ensure_mode.into()),
+            data: &value.data,
         }
     }
 }

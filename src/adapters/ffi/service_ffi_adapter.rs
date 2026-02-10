@@ -2,6 +2,7 @@ use crate::adapters::ffi::http::models::{FfiHttpEndpoint, FfiHttpResponse};
 use crate::adapters::ffi::storage::models::{FfiReadFile, FfiWriteFile};
 use crate::service::service_runtime::ServiceRuntime;
 use std::sync::Arc;
+use crate::domain::models::storage_models::WriteFile;
 
 pub struct ServiceFfiAdapter {
     runtime: Arc<ServiceRuntime>,
@@ -40,8 +41,8 @@ impl ServiceFfiAdapter {
         Ok(data)
     }
 
-    pub async fn write_file(&self, ffi_write_file: FfiWriteFile<'_>) -> Result<(), String> {
-        let domain_write_file = ffi_write_file.into();
+    pub async fn write_file(&self, ffi_write_file: FfiWriteFile) -> Result<(), String> {
+        let domain_write_file = WriteFile::from(&ffi_write_file);
         let data = self
             .runtime
             .write_file(domain_write_file)
