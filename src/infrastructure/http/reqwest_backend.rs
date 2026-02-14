@@ -62,6 +62,24 @@ impl ReqwestBackend {
             });
             client = client.proxy(proxy);
         }
+        if let Some(path_proxy) = config.path_proxy {
+            let proxy = Proxy::custom(move |url| {
+                let path_str = url.path();
+                for (path, proxy) in path_proxy.iter() {
+                    if path.to_string() == path_str.to_string() {
+                        let proxy_url = Url::parse(proxy);
+                        if proxy_url.is_err() {
+                            break;
+                        }
+                        let proxy_url = proxy_url.unwrap();
+                        return Some(proxy_url);
+                    }
+                }
+
+                return None::<Url>;
+            });
+            client = client.proxy(proxy);
+        }
 
         let client = client
             .build()
