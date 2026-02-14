@@ -62,24 +62,6 @@ impl ReqwestBackend {
             });
             client = client.proxy(proxy);
         }
-        if let Some(path_proxy) = config.path_proxy {
-            let proxy = Proxy::custom(move |url| {
-                let path_str = url.path();
-                for (path, proxy) in path_proxy.iter() {
-                    if path.to_string() == path_str.to_string() {
-                        let proxy_url = Url::parse(proxy);
-                        if proxy_url.is_err() {
-                            break;
-                        }
-                        let proxy_url = proxy_url.unwrap();
-                        return Some(proxy_url);
-                    }
-                }
-
-                return None::<Url>;
-            });
-            client = client.proxy(proxy);
-        }
 
         let client = client
             .build()
@@ -253,17 +235,17 @@ impl HttpClient for ReqwestBackend {
             request_builder = self.inject_cookies(&url, request_builder).await?;
         }
 
-        let response = request_builder
+        let request = request_builder
             .timeout(endpoint.timeout)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    HttpClientError::Timeout(endpoint.timeout)
-                } else {
-                    HttpClientError::Network(e.to_string())
-                }
-            })?;
+            .build()
+            .map_err(|e| HttpClientError::Configuration(e.to_string()))?;
+        let response = self.client.execute(request).await.map_err(|e| {
+            if e.is_timeout() {
+                HttpClientError::Timeout(endpoint.timeout)
+            } else {
+                HttpClientError::Network(e.to_string())
+            }
+        })?;
 
         if self.cookie_store.as_ref().is_some() {
             let _ = self.extract_cookies(&response).await;

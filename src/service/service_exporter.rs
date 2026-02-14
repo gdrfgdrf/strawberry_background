@@ -69,7 +69,6 @@ mod tests {
                 cookie_config: None,
                 all_proxy: None,
                 host_proxy: None,
-                path_proxy: None
             }),
             cookie: Some(CookieConfig {
                 cookie_path: Some("test_cookie.json".to_string()),
@@ -123,8 +122,8 @@ mod tests {
 
         println!("response length: {}", response.body.len());
 
-        /// test cookie store
-        await_test!(async { loop {} });
+        // /// test cookie store
+        // await_test!(async { loop {} });
     }
 
     #[test]

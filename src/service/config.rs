@@ -27,7 +27,6 @@ pub struct HttpConfig {
     pub decryption_provider: Option<Arc<dyn DecryptionProvider>>,
     pub all_proxy: Option<String>,
     pub host_proxy: Option<Vec<(String, String)>>,
-    pub path_proxy: Option<Vec<(String, String)>>,
 }
 
 #[derive(Debug, Clone)]
