@@ -68,7 +68,8 @@ mod tests {
                 decryption_provider: None,
                 cookie_config: None,
                 all_proxy: None,
-                host_proxy: None
+                host_proxy: None,
+                path_proxy: None
             }),
             cookie: Some(CookieConfig {
                 cookie_path: Some("test_cookie.json".to_string()),
