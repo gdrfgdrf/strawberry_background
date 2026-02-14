@@ -44,6 +44,24 @@ impl ReqwestBackend {
         if let Some(all_proxy) = config.all_proxy {
             client = client.proxy(Proxy::all(all_proxy).unwrap());
         }
+        if let Some(host_proxy) = config.host_proxy {
+            let proxy = Proxy::custom(move |url| {
+                let host_str = url.host_str()?;
+                for (host, proxy) in host_proxy.iter() {
+                    if host.to_string() == host_str.to_string() {
+                        let proxy_url = Url::parse(proxy);
+                        if proxy_url.is_err() {
+                            break;
+                        }
+                        let proxy_url = proxy_url.unwrap();
+                        return Some(proxy_url);
+                    }
+                }
+
+                return None::<Url>;
+            });
+            client = client.proxy(proxy);
+        }
 
         let client = client
             .build()
@@ -212,7 +230,7 @@ impl HttpClient for ReqwestBackend {
                 request_builder = request_builder.body(body);
             }
         }
-        
+
         if self.cookie_store.as_ref().is_some() {
             request_builder = self.inject_cookies(&url, request_builder).await?;
         }
@@ -228,7 +246,7 @@ impl HttpClient for ReqwestBackend {
                     HttpClientError::Network(e.to_string())
                 }
             })?;
-        
+
         if self.cookie_store.as_ref().is_some() {
             let _ = self.extract_cookies(&response).await;
         }

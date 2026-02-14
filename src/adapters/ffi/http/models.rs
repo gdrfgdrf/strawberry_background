@@ -104,7 +104,7 @@ impl FfiHttpEndpoint {
             requires_encryption,
             requires_decryption,
             user_agent,
-            content_type
+            content_type,
         }
     }
 }

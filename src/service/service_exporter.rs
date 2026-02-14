@@ -68,6 +68,7 @@ mod tests {
                 decryption_provider: None,
                 cookie_config: None,
                 all_proxy: None,
+                host_proxy: None
             }),
             cookie: Some(CookieConfig {
                 cookie_path: Some("test_cookie.json".to_string()),
@@ -112,7 +113,7 @@ mod tests {
                     requires_encryption: false,
                     requires_decryption: false,
                     user_agent: None,
-                    content_type: None
+                    content_type: None,
                 })
                 .unwrap()
         )
@@ -182,12 +183,9 @@ mod tests {
         let factory = runtime.file_cache_manager_factory.clone().unwrap();
         let channel1 = await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
 
-        let _ = await_test!(channel1.cache(
-            "test-tag".to_string(),
-            "test-sentence".to_string(),
-            &data
-        ))
-        .unwrap();
+        let _ =
+            await_test!(channel1.cache("test-tag".to_string(), "test-sentence".to_string(), &data))
+                .unwrap();
         let fetched = await_test!(channel1.fetch(&"test-tag".to_string())).unwrap();
 
         assert_eq!(data, fetched);
@@ -205,12 +203,9 @@ mod tests {
         let factory = runtime.file_cache_manager_factory.clone().unwrap();
         let channel2 = await_test!(factory.get_with_name(&"test-channel-2".to_string())).unwrap();
 
-        let _ = await_test!(channel2.cache(
-            "test-tag".to_string(),
-            "test-sentence".to_string(),
-            &data
-        ))
-        .unwrap();
+        let _ =
+            await_test!(channel2.cache("test-tag".to_string(), "test-sentence".to_string(), &data))
+                .unwrap();
         let fetched = await_test!(channel2.fetch(&"test-tag".to_string())).unwrap();
 
         assert_eq!(data, fetched);
@@ -228,12 +223,9 @@ mod tests {
         let factory = runtime.file_cache_manager_factory.clone().unwrap();
         let channel1 = await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
 
-        let _ = await_test!(channel1.cache(
-            "test-tag".to_string(),
-            "test-sentence".to_string(),
-            &data
-        ))
-        .unwrap();
+        let _ =
+            await_test!(channel1.cache("test-tag".to_string(), "test-sentence".to_string(), &data))
+                .unwrap();
 
         let fetched = await_test!(channel1.fetch(&"test-tag".to_string())).unwrap();
         assert_eq!(data, fetched);
