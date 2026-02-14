@@ -69,6 +69,8 @@ mod tests {
                 cookie_config: None,
                 all_proxy: None,
                 host_proxy: None,
+                tls_danger_accept_invalid_certs: false,
+                tls_danger_accept_invalid_hostnames: false
             }),
             cookie: Some(CookieConfig {
                 cookie_path: Some("test_cookie.json".to_string()),
@@ -91,7 +93,7 @@ mod tests {
                 ]),
             }),
         })
-        .unwrap();
+            .unwrap();
         let runtime = service_exporter.runtime;
         runtime
     }
@@ -117,8 +119,8 @@ mod tests {
                 })
                 .unwrap()
         )
-        .unwrap()
-        .unwrap();
+            .unwrap()
+            .unwrap();
 
         println!("response length: {}", response.body.len());
 
@@ -147,8 +149,8 @@ mod tests {
                 timeout: Duration::from_secs(60),
                 ensure_mode: Some(EnsureMode::SyncAll)
             }))
-            .unwrap()
-            .unwrap();
+                .unwrap()
+                .unwrap();
 
             write_costs.push(current_time.elapsed().unwrap().as_millis() as f32);
 
@@ -256,7 +258,7 @@ mod tests {
                     format!("test-sentence-{}", i),
                     &data
                 ))
-                .unwrap();
+                    .unwrap();
 
                 let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i))).unwrap();
                 assert_eq!(data, fetched);
@@ -299,7 +301,7 @@ mod tests {
                 format!("test-sentence-auto-save-{}", 0),
                 &data
             ))
-            .unwrap();
+                .unwrap();
 
             let fetched =
                 await_test!(channel1.fetch(&format!("test-tag-auto-save-{}", 0))).unwrap();

@@ -2,7 +2,7 @@ use crate::domain::models::cookie_models::{Cookie, SameSite};
 use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
-use crate::service::config::{CookieConfig, HttpConfig};
+use crate::service::config::HttpConfig;
 use async_trait::async_trait;
 use reqwest::{Client, Method, Proxy, Url};
 use std::sync::Arc;
@@ -39,6 +39,9 @@ impl ReqwestBackend {
             .pool_idle_timeout(config.pool_idle_timeout)
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
+            .connection_verbose(true)
+            .tls_danger_accept_invalid_hostnames(config.tls_danger_accept_invalid_hostnames)
+            .tls_danger_accept_invalid_certs(config.tls_danger_accept_invalid_certs)
             .pool_max_idle_per_host(config.max_connections_per_host);
 
         if let Some(all_proxy) = config.all_proxy {

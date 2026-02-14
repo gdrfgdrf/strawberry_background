@@ -27,6 +27,8 @@ pub struct HttpConfig {
     pub decryption_provider: Option<Arc<dyn DecryptionProvider>>,
     pub all_proxy: Option<String>,
     pub host_proxy: Option<Vec<(String, String)>>,
+    pub tls_danger_accept_invalid_hostnames: bool,
+    pub tls_danger_accept_invalid_certs: bool
 }
 
 #[derive(Debug, Clone)]
