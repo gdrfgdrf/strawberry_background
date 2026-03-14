@@ -23,7 +23,7 @@ rkyv = { version = "0.8.14", features = ["std", "bytecheck"] }
 bytecheck = "0.8.2"
 uuid = { version = "1.20.0", features = ["v4"] }
 futures-util = "0.3.32"
-bytes = "1.11.1"
+bytes = "1.11.0"
 
 [dev-dependencies]
 tokio-test = "*"
