@@ -1,6 +1,9 @@
 use crate::adapters::ffi::errors::FfiAdapterError;
-use crate::domain::models::http_models::{HttpEndpoint, HttpMethod, HttpResponse};
+use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse, HttpStreamResponse};
 use std::time::Duration;
+use bytes::Bytes;
+use futures_util::stream::BoxStream;
+use futures_util::TryStreamExt;
 
 #[derive(Clone)]
 pub struct FfiHttpEndpoint {
@@ -25,6 +28,12 @@ pub struct FfiHttpResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+pub struct FfiHttpStreamResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub stream: BoxStream<'static, Result<Bytes, HttpClientError>>
 }
 
 #[derive(Clone)]
@@ -71,6 +80,16 @@ impl From<HttpResponse> for FfiHttpResponse {
             status: domain_resp.status,
             headers: domain_resp.headers,
             body: domain_resp.body,
+        }
+    }
+}
+
+impl From<HttpStreamResponse> for FfiHttpStreamResponse {
+    fn from(value: HttpStreamResponse) -> Self {
+        FfiHttpStreamResponse {
+            status: value.status,
+            headers: value.headers,
+            stream: value.stream
         }
     }
 }

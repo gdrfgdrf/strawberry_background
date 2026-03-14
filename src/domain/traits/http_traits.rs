@@ -1,7 +1,8 @@
 use crate::domain::models::http_models::{
-    HttpClientError, HttpEndpoint, HttpResponse,
+    HttpClientError, HttpEndpoint, HttpResponse, HttpStreamResponse,
 };
 use async_trait::async_trait;
+use futures_util::Stream;
 use std::sync::Arc;
 
 #[async_trait]
@@ -13,6 +14,10 @@ pub trait HttpClient: Send + Sync + 'static {
     fn remove_decryption_provider(&mut self) -> Option<Arc<dyn DecryptionProvider>>;
 
     async fn execute(&self, endpoint: HttpEndpoint) -> Result<HttpResponse, HttpClientError>;
+    async fn execute_stream(
+        &self,
+        endpoint: HttpEndpoint,
+    ) -> Result<HttpStreamResponse, HttpClientError>;
 }
 
 pub trait EncryptionProvider: Send + Sync + 'static {

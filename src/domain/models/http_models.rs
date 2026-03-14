@@ -1,6 +1,9 @@
-
+use std::sync::Arc;
 use crate::utils::url_component::{encode_component, encode_query_component};
 use std::time::Duration;
+use bytes::Bytes;
+use futures_util::Stream;
+use futures_util::stream::BoxStream;
 
 #[derive(Debug, Clone)]
 pub struct HttpEndpoint {
@@ -33,6 +36,12 @@ pub struct HttpResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+pub struct HttpStreamResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub stream: BoxStream<'static, Result<Bytes, HttpClientError>>
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1,5 +1,7 @@
 use crate::domain::models::file_cache_models::CacheError;
-use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpResponse};
+use crate::domain::models::http_models::{
+    HttpClientError, HttpEndpoint, HttpResponse, HttpStreamResponse,
+};
 use crate::domain::models::storage_models::{ReadFile, StorageError, WriteFile};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::file_cache_traits::FileCacheManagerFactory;
@@ -171,6 +173,18 @@ impl ServiceRuntime {
         Ok(self.execute_async(async move { client.execute(endpoint).await }))
     }
 
+    pub fn execute_stream_http(
+        &self,
+        endpoint: HttpEndpoint,
+    ) -> Result<JoinHandle<Result<HttpStreamResponse, HttpClientError>>, ServiceError> {
+        if self.http_client.is_none() {
+            return Err(ServiceError::NotConfigured("Http Client".to_string()));
+        }
+
+        let client = self.http_client.as_ref().unwrap().clone();
+        Ok(self.execute_async(async move { client.execute_stream(endpoint).await }))
+    }
+
     pub async fn read_file(
         &self,
         read_file: ReadFile,
@@ -318,9 +332,8 @@ impl ServiceRuntime {
             return None;
         }
         let config = config.unwrap();
-        let factory = tokio_runtime.block_on(async {
-            Self::create_file_cache_factory(config, storage_manager).await
-        });
+        let factory = tokio_runtime
+            .block_on(async { Self::create_file_cache_factory(config, storage_manager).await });
         if factory.is_err() {
             return None;
         }

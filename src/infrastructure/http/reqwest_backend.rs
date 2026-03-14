@@ -1,10 +1,13 @@
 use crate::domain::models::cookie_models::{Cookie, SameSite};
-use crate::domain::models::http_models::{HttpClientError, HttpEndpoint, HttpMethod, HttpResponse};
+use crate::domain::models::http_models::{
+    HttpClientError, HttpEndpoint, HttpMethod, HttpResponse, HttpStreamResponse,
+};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
 use crate::service::config::HttpConfig;
 use async_trait::async_trait;
-use reqwest::{Client, Method, Proxy, Url};
+use futures_util::{Stream, StreamExt, TryStreamExt};
+use reqwest::{Client, Method, Proxy, Response, Url};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -165,27 +168,8 @@ impl ReqwestBackend {
 
         Ok(())
     }
-}
 
-#[async_trait]
-impl HttpClient for ReqwestBackend {
-    fn set_encryption_provider(&mut self, encryption_provider: Arc<dyn EncryptionProvider>) {
-        self.encryption_provider = Some(encryption_provider);
-    }
-
-    fn set_decryption_provider(&mut self, decryption_provider: Arc<dyn DecryptionProvider>) {
-        self.decryption_provider = Some(decryption_provider);
-    }
-
-    fn remove_encryption_provider(&mut self) -> Option<Arc<dyn EncryptionProvider>> {
-        self.encryption_provider.take()
-    }
-
-    fn remove_decryption_provider(&mut self) -> Option<Arc<dyn DecryptionProvider>> {
-        self.decryption_provider.take()
-    }
-
-    async fn execute(&self, endpoint: HttpEndpoint) -> Result<HttpResponse, HttpClientError> {
+    async fn do_execute(&self, endpoint: HttpEndpoint) -> Result<Response, HttpClientError> {
         if endpoint.body.is_some()
             && endpoint.requires_encryption
             && self.encryption_provider.is_none()
@@ -254,6 +238,32 @@ impl HttpClient for ReqwestBackend {
             let _ = self.extract_cookies(&response).await;
         }
 
+        Ok(response)
+    }
+}
+
+#[async_trait]
+impl HttpClient for ReqwestBackend {
+    fn set_encryption_provider(&mut self, encryption_provider: Arc<dyn EncryptionProvider>) {
+        self.encryption_provider = Some(encryption_provider);
+    }
+
+    fn set_decryption_provider(&mut self, decryption_provider: Arc<dyn DecryptionProvider>) {
+        self.decryption_provider = Some(decryption_provider);
+    }
+
+    fn remove_encryption_provider(&mut self) -> Option<Arc<dyn EncryptionProvider>> {
+        self.encryption_provider.take()
+    }
+
+    fn remove_decryption_provider(&mut self) -> Option<Arc<dyn DecryptionProvider>> {
+        self.decryption_provider.take()
+    }
+
+    async fn execute(&self, endpoint: HttpEndpoint) -> Result<HttpResponse, HttpClientError> {
+        let requires_decryption = endpoint.requires_decryption;
+
+        let response = self.do_execute(endpoint).await?;
         let status = response.status().as_u16();
         let headers: Vec<(String, String)> = response
             .headers()
@@ -267,7 +277,7 @@ impl HttpClient for ReqwestBackend {
             .map_err(|e| HttpClientError::Network(e.to_string()))?
             .to_vec();
 
-        if endpoint.requires_decryption {
+        if requires_decryption {
             body = self.decryption_provider.as_ref().unwrap().decrypt(&body)?;
         }
 
@@ -275,6 +285,28 @@ impl HttpClient for ReqwestBackend {
             status,
             headers,
             body,
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        endpoint: HttpEndpoint,
+    ) -> Result<HttpStreamResponse, HttpClientError> {
+        let response = self.do_execute(endpoint).await?;
+        let status = response.status().as_u16();
+        let headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let stream = response.bytes_stream();
+        let stream = stream.map_err(|e| HttpClientError::Network(e.to_string()));
+        let stream = Box::pin(stream);
+
+        Ok(HttpStreamResponse {
+            status,
+            headers,
+            stream,
         })
     }
 }
