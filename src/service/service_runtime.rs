@@ -91,6 +91,7 @@ impl ServiceRuntime {
         if file_cache_manager_factory.is_ok() {
             optional_file_cache_manager_factory = Some(file_cache_manager_factory?);
         } else {
+            println!("{}", file_cache_manager_factory.err().unwrap());
             optional_file_cache_manager_factory = None;
         }
 
@@ -146,6 +147,7 @@ impl ServiceRuntime {
         if file_cache_manager_factory.is_ok() {
             optional_file_cache_manager_factory = Some(file_cache_manager_factory?);
         } else {
+            println!("{}", file_cache_manager_factory.err().unwrap());
             optional_file_cache_manager_factory = None;
         }
 
