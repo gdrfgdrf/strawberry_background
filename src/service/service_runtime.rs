@@ -53,13 +53,23 @@ impl ServiceRuntime {
     pub fn initialize(config: RuntimeConfig) -> Result<Arc<Self>, InitError> {
         let tokio_runtime = Self::create_tokio_runtime(config.tokio)?;
 
-        let cookie_store_initialize_option =
+        let cookie_store_initialization =
             Self::initialize_cookie_store(&tokio_runtime, config.cookie);
+        let optional_cookie_store_initialization: Option<(
+            Arc<dyn CookieStore>,
+            Arc<Mutex<JoinHandle<()>>>,
+        )>;
+        if cookie_store_initialization.is_ok() {
+            optional_cookie_store_initialization = Some(cookie_store_initialization?);
+        } else {
+            optional_cookie_store_initialization = None;
+        }
+
         let mut cookie_store: Option<Arc<dyn CookieStore>> = None;
         let mut cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>> = None;
 
-        if cookie_store_initialize_option.is_some() {
-            let cookie_store_initialize = cookie_store_initialize_option.unwrap();
+        if optional_cookie_store_initialization.is_some() {
+            let cookie_store_initialize = optional_cookie_store_initialization.unwrap();
             cookie_store = Some(cookie_store_initialize.0);
             cookie_auto_save_handle = Some(cookie_store_initialize.1);
         }
@@ -77,6 +87,12 @@ impl ServiceRuntime {
             config.file_cache_config,
             storage_manager.clone(),
         );
+        let optional_file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>>;
+        if file_cache_manager_factory.is_ok() {
+            optional_file_cache_manager_factory = Some(file_cache_manager_factory?);
+        } else {
+            optional_file_cache_manager_factory = None;
+        }
 
         Ok(Arc::new(Self {
             tokio_runtime: Some(tokio_runtime),
@@ -84,7 +100,7 @@ impl ServiceRuntime {
             http_client,
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
-            file_cache_manager_factory,
+            file_cache_manager_factory: optional_file_cache_manager_factory,
         }))
     }
 
@@ -92,13 +108,23 @@ impl ServiceRuntime {
         config: RuntimeConfig,
         tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
     ) -> Result<Arc<Self>, InitError> {
-        let cookie_store_initialize_option =
+        let cookie_store_initialization =
             Self::initialize_cookie_store(&tokio_runtime, config.cookie);
+        let optional_cookie_store_initialization: Option<(
+            Arc<dyn CookieStore>,
+            Arc<Mutex<JoinHandle<()>>>,
+        )>;
+        if cookie_store_initialization.is_ok() {
+            optional_cookie_store_initialization = Some(cookie_store_initialization?);
+        } else {
+            optional_cookie_store_initialization = None;
+        }
+
         let mut cookie_store: Option<Arc<dyn CookieStore>> = None;
         let mut cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>> = None;
 
-        if cookie_store_initialize_option.is_some() {
-            let cookie_store_initialize = cookie_store_initialize_option.unwrap();
+        if optional_cookie_store_initialization.is_some() {
+            let cookie_store_initialize = optional_cookie_store_initialization.unwrap();
             cookie_store = Some(cookie_store_initialize.0);
             cookie_auto_save_handle = Some(cookie_store_initialize.1);
         }
@@ -116,6 +142,12 @@ impl ServiceRuntime {
             config.file_cache_config,
             storage_manager.clone(),
         );
+        let optional_file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>>;
+        if file_cache_manager_factory.is_ok() {
+            optional_file_cache_manager_factory = Some(file_cache_manager_factory?);
+        } else {
+            optional_file_cache_manager_factory = None;
+        }
 
         Ok(Arc::new(Self {
             tokio_runtime: None,
@@ -123,7 +155,7 @@ impl ServiceRuntime {
             http_client,
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
-            file_cache_manager_factory,
+            file_cache_manager_factory: optional_file_cache_manager_factory,
         }))
     }
 
@@ -327,42 +359,39 @@ impl ServiceRuntime {
         tokio_runtime: &Runtime,
         config: Option<FileCacheConfig>,
         storage_manager: Arc<dyn StorageManager>,
-    ) -> Option<Arc<dyn FileCacheManagerFactory>> {
+    ) -> Result<Arc<dyn FileCacheManagerFactory>, InitError> {
         if config.is_none() {
-            return None;
+            return Err(InitError::Configuration("config is null".to_string()));
         }
         let config = config.unwrap();
         let factory = tokio_runtime
-            .block_on(async { Self::create_file_cache_factory(config, storage_manager).await });
-        if factory.is_err() {
-            return None;
-        }
-
-        Some(factory.unwrap())
+            .block_on(async { Self::create_file_cache_factory(config, storage_manager).await })?;
+        Ok(factory)
     }
 
     fn initialize_cookie_store(
         tokio_runtime: &Runtime,
         config: Option<CookieConfig>,
-    ) -> Option<(Arc<dyn CookieStore>, Arc<Mutex<JoinHandle<()>>>)> {
+    ) -> Result<(Arc<dyn CookieStore>, Arc<Mutex<JoinHandle<()>>>), InitError> {
         let cookie_store_option = if let Some(cookie_config) = config {
             Some(tokio_runtime.block_on(async {
                 let cookie_store = Self::create_cookie_store(cookie_config).await?;
                 Ok::<_, InitError>(cookie_store)
             }))
         } else {
-            return None;
+            return Err(InitError::Configuration("config is null".to_string()));
         };
 
         let cookie_store = if let Some(cookie_store) = cookie_store_option {
             if cookie_store.is_err() {
-                return None;
+                return Err(cookie_store.err().unwrap());
             } else {
-                Some(cookie_store.unwrap())
+                Some(cookie_store?)
             }
         } else {
-            return None;
+            return Err(InitError::Configuration("cookie store is null".to_string()));
         };
+
         let cookie_auto_save_handle = if let Some(cookie_store) = &cookie_store {
             let unwrapped = cookie_store.clone();
             let file_backend_cookie_store = unwrapped.downcast_arc::<FileBackedCookieStore>();
@@ -372,13 +401,15 @@ impl ServiceRuntime {
 
                 Some(Arc::new(Mutex::new(handle)))
             } else {
-                return None;
+                return Err(InitError::Configuration(
+                    "file cookie store is null".to_string(),
+                ));
             }
         } else {
-            return None;
+            return Err(InitError::Configuration("cookie store is null".to_string()));
         };
 
-        Some((cookie_store?, cookie_auto_save_handle?))
+        Ok((cookie_store.unwrap(), cookie_auto_save_handle.unwrap()))
     }
 
     fn create_tokio_runtime(tokio_config: TokioConfig) -> Result<Runtime, InitError> {
