@@ -1,5 +1,5 @@
 use crate::domain::models::file_cache_models::{CacheChannel, CacheError, CacheRecord};
-use crate::domain::models::storage_models::{ReadFile, WriteFile, WriteMode};
+use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
 use crate::domain::traits::file_cache_traits::{FileCacheManager, FileCacheManagerFactory};
 use crate::domain::traits::storage_traits::StorageManager;
 use crate::service::config::FileCacheConfig;
@@ -387,7 +387,13 @@ impl FileCacheManager for DefaultFileCacheManager {
         self.ensure_directory_exist(&self.path).await?;
         self.ensure_file_exist(&channel_path).await?;
 
-        let write_file = WriteFile::path(channel_path, &bytes);
+        let write_file = WriteFile {
+            path: channel_path,
+            mode: WriteMode::Cover,
+            timeout: Duration::from_secs(60),
+            ensure_mode: Some(EnsureMode::SyncAll),
+            data: &bytes
+        };
         self.storage_manager
             .write(write_file)
             .await
