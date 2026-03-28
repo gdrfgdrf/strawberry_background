@@ -29,7 +29,7 @@ pub fn create_service_exporter(
 
 pub fn create_service_exporter_with_tokio_runtime(
     config: RuntimeConfig,
-    tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
+    tokio_runtime: Arc<Runtime>,
     monitor: Option<Arc<dyn Monitor>>,
 ) -> Result<ServiceExporter, InitError> {
     let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime, monitor)?;

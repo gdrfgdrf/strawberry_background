@@ -34,7 +34,7 @@ pub fn create_service_exporter_ffi_adapter(
 
 pub fn create_service_exporter_ffi_adapter_with_tokio_runtime(
     config: RuntimeConfig,
-    tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
+    tokio_runtime: Arc<Runtime>,
     monitor: Option<Arc<dyn Monitor>>,
 ) -> Result<ServiceExporterFfiAdapter, InitError> {
     let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime, monitor)?;
