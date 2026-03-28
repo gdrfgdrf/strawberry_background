@@ -6,6 +6,6 @@ pub trait Monitor {
     fn subscribe(&self, callback: Box<dyn Fn(Arc<MonitorEvent>)>) -> Result<Arc<dyn MonitorSubscriber>, MonitorError>;
 }
 
-pub trait MonitorSubscriber {
+pub trait MonitorSubscriber: Send + Sync {
     fn cancel(&self);
 }
