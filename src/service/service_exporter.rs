@@ -1,7 +1,6 @@
 use crate::domain::traits::monitor_traits::Monitor;
 use crate::service::config::RuntimeConfig;
 use crate::service::service_runtime::{InitError, ServiceRuntime};
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -21,18 +20,16 @@ impl ServiceExporter {
 
 pub fn create_service_exporter(
     config: RuntimeConfig,
-    monitor: Option<Arc<dyn Monitor>>,
 ) -> Result<ServiceExporter, InitError> {
-    let runtime = ServiceRuntime::initialize(config, monitor)?;
+    let runtime = ServiceRuntime::initialize(config)?;
     Ok(ServiceExporter::new(runtime))
 }
 
 pub fn create_service_exporter_with_tokio_runtime(
     config: RuntimeConfig,
     tokio_runtime: Arc<Runtime>,
-    monitor: Option<Arc<dyn Monitor>>,
 ) -> Result<ServiceExporter, InitError> {
-    let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime, monitor)?;
+    let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime)?;
     Ok(ServiceExporter::new(runtime))
 }
 
@@ -99,7 +96,6 @@ mod tests {
                     ]),
                 }),
             },
-            None,
         )
         .unwrap();
         let runtime = service_exporter.runtime;
