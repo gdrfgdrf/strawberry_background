@@ -27,4 +27,6 @@ pub struct MonitorHttpData {
 pub enum MonitorError {
     #[error("upgrade reference error: {0}")]
     UpgradeReference(String),
+    #[error("not configured")]
+    NotConfigured
 }
