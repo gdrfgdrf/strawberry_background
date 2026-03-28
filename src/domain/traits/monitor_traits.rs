@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use crate::domain::models::monitor_models::{MonitorError, MonitorEvent};
 
-pub trait Monitor {
+pub trait Monitor: Send + Sync {
     fn send(&self, event: MonitorEvent);
     fn subscribe(&self, callback: Box<dyn Fn(Arc<MonitorEvent>)>) -> Result<Arc<dyn MonitorSubscriber>, MonitorError>;
 }
 
-pub trait MonitorSubscriber {
+pub trait MonitorSubscriber: Send + Sync {
     fn cancel(&self);
 }
