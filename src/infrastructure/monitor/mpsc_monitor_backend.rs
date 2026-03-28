@@ -18,7 +18,7 @@ pub struct MpscMonitorBackend {
 pub struct MpscMonitorSubscriber {
     id: String,
     monitor: Arc<MpscMonitorBackend>,
-    callback: Box<dyn Fn(Arc<MonitorEvent>)>,
+    callback: Box<dyn Fn(Arc<MonitorEvent>) + Send + Sync>,
 }
 
 impl MpscMonitorBackend {
@@ -51,7 +51,7 @@ impl Monitor for MpscMonitorBackend {
 
     fn subscribe(
         &self,
-        callback: Box<dyn Fn(Arc<MonitorEvent>)>,
+        callback: Box<dyn Fn(Arc<MonitorEvent>) + Send + Sync>,
     ) -> Result<Arc<dyn MonitorSubscriber>, MonitorError> {
         let self_arc = self.self_weak.lock().unwrap().clone().upgrade();
         if self_arc.is_none() {
