@@ -17,7 +17,6 @@ use crate::service::config::{
 use crate::superstructure::file_cache_backend::{
     DefaultFileCacheManager, SingletonFileCacheManagerFactory,
 };
-use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
@@ -43,7 +42,7 @@ pub enum ServiceError {
 
 pub struct ServiceRuntime {
     pub tokio_runtime: Option<Runtime>,
-    pub provided_tokio_runtime: Option<Arc<AssertUnwindSafe<Runtime>>>,
+    pub provided_tokio_runtime: Option<Arc<Runtime>>,
     pub http_client: Option<Arc<dyn HttpClient>>,
     pub cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>>,
     pub storage_manager: Option<Arc<dyn StorageManager>>,
@@ -113,7 +112,7 @@ impl ServiceRuntime {
 
     pub fn with_tokio_runtime(
         config: RuntimeConfig,
-        tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
+        tokio_runtime: Arc<Runtime>,
         monitor: Option<Arc<dyn Monitor>>,
     ) -> Result<Arc<Self>, InitError> {
         let cookie_store_initialization =
