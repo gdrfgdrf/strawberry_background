@@ -41,7 +41,7 @@ pub struct HttpResponse {
 pub struct HttpStreamResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
-    pub stream: BoxStream<'static, Result<Bytes, HttpClientError>>
+    pub stream: BoxStream<'static, Result<Bytes, HttpClientError>>,
 }
 
 #[derive(Debug, thiserror::Error)]

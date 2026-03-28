@@ -1,3 +1,4 @@
+use crate::domain::traits::monitor_traits::Monitor;
 use crate::service::config::RuntimeConfig;
 use crate::service::service_runtime::{InitError, ServiceRuntime};
 use std::panic::AssertUnwindSafe;
@@ -18,16 +19,20 @@ impl ServiceExporter {
     }
 }
 
-pub fn create_service_exporter(config: RuntimeConfig) -> Result<ServiceExporter, InitError> {
-    let runtime = ServiceRuntime::initialize(config)?;
+pub fn create_service_exporter(
+    config: RuntimeConfig,
+    monitor: Option<Arc<dyn Monitor>>,
+) -> Result<ServiceExporter, InitError> {
+    let runtime = ServiceRuntime::initialize(config, monitor)?;
     Ok(ServiceExporter::new(runtime))
 }
 
 pub fn create_service_exporter_with_tokio_runtime(
     config: RuntimeConfig,
     tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
+    monitor: Option<Arc<dyn Monitor>>,
 ) -> Result<ServiceExporter, InitError> {
-    let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime)?;
+    let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime, monitor)?;
     Ok(ServiceExporter::new(runtime))
 }
 
@@ -53,47 +58,50 @@ mod tests {
     }
 
     fn initialize_runtime() -> Arc<ServiceRuntime> {
-        let service_exporter = create_service_exporter(RuntimeConfig {
-            tokio: TokioConfig {
-                worker_threads: Some(4),
-                thread_stack_size: None,
-                thread_name_prefix: Some("strawberry-background-worker".to_string()),
+        let service_exporter = create_service_exporter(
+            RuntimeConfig {
+                tokio: TokioConfig {
+                    worker_threads: Some(4),
+                    thread_stack_size: None,
+                    thread_name_prefix: Some("strawberry-background-worker".to_string()),
+                },
+                http: Some(HttpConfig {
+                    connect_timeout: Duration::from_secs(10),
+                    request_timeout: Duration::from_secs(30),
+                    pool_idle_timeout: Duration::from_secs(90),
+                    max_connections_per_host: 100,
+                    encryption_provider: None,
+                    decryption_provider: None,
+                    cookie_config: None,
+                    all_proxy: None,
+                    host_proxy: None,
+                    tls_danger_accept_invalid_certs: false,
+                    tls_danger_accept_invalid_hostnames: false,
+                }),
+                cookie: Some(CookieConfig {
+                    cookie_path: Some("test_cookie.json".to_string()),
+                    debounce_delay: Duration::from_secs(10),
+                    auto_save_interval: Some(Duration::from_secs(60)),
+                    initial_cookies: None,
+                }),
+                file_cache_config: Some(FileCacheConfig {
+                    base_path: "file_cache_test".to_string(),
+                    auto_save_interval: Duration::from_secs(10),
+                    channels: Some(vec![
+                        FileCacheChannelConfig {
+                            name: "test-channel-1".to_string(),
+                            extension: None,
+                        },
+                        FileCacheChannelConfig {
+                            name: "test-channel-2".to_string(),
+                            extension: Some("extension".to_string()),
+                        },
+                    ]),
+                }),
             },
-            http: Some(HttpConfig {
-                connect_timeout: Duration::from_secs(10),
-                request_timeout: Duration::from_secs(30),
-                pool_idle_timeout: Duration::from_secs(90),
-                max_connections_per_host: 100,
-                encryption_provider: None,
-                decryption_provider: None,
-                cookie_config: None,
-                all_proxy: None,
-                host_proxy: None,
-                tls_danger_accept_invalid_certs: false,
-                tls_danger_accept_invalid_hostnames: false
-            }),
-            cookie: Some(CookieConfig {
-                cookie_path: Some("test_cookie.json".to_string()),
-                debounce_delay: Duration::from_secs(10),
-                auto_save_interval: Some(Duration::from_secs(60)),
-                initial_cookies: None,
-            }),
-            file_cache_config: Some(FileCacheConfig {
-                base_path: "file_cache_test".to_string(),
-                auto_save_interval: Duration::from_secs(10),
-                channels: Some(vec![
-                    FileCacheChannelConfig {
-                        name: "test-channel-1".to_string(),
-                        extension: None,
-                    },
-                    FileCacheChannelConfig {
-                        name: "test-channel-2".to_string(),
-                        extension: Some("extension".to_string()),
-                    },
-                ]),
-            }),
-        })
-            .unwrap();
+            None,
+        )
+        .unwrap();
         let runtime = service_exporter.runtime;
         runtime
     }
@@ -119,8 +127,8 @@ mod tests {
                 })
                 .unwrap()
         )
-            .unwrap()
-            .unwrap();
+        .unwrap()
+        .unwrap();
 
         println!("response length: {}", response.body.len());
 
@@ -149,8 +157,8 @@ mod tests {
                 timeout: Duration::from_secs(60),
                 ensure_mode: Some(EnsureMode::SyncAll)
             }))
-                .unwrap()
-                .unwrap();
+            .unwrap()
+            .unwrap();
 
             write_costs.push(current_time.elapsed().unwrap().as_millis() as f32);
 
@@ -258,7 +266,7 @@ mod tests {
                     format!("test-sentence-{}", i),
                     &data
                 ))
-                    .unwrap();
+                .unwrap();
 
                 let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i))).unwrap();
                 assert_eq!(data, fetched);
@@ -301,7 +309,7 @@ mod tests {
                 format!("test-sentence-auto-save-{}", 0),
                 &data
             ))
-                .unwrap();
+            .unwrap();
 
             let fetched =
                 await_test!(channel1.fetch(&format!("test-tag-auto-save-{}", 0))).unwrap();

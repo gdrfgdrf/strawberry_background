@@ -2,14 +2,45 @@ use crate::domain::models::cookie_models::{Cookie, SameSite};
 use crate::domain::models::http_models::{
     HttpClientError, HttpEndpoint, HttpMethod, HttpResponse, HttpStreamResponse,
 };
+use crate::domain::models::monitor_models::{EventStage, MonitorEvent, MonitorHttpData, Progress};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
+use crate::domain::traits::monitor_traits::Monitor;
+use crate::monitor::monitor_service::monitoring;
 use crate::service::config::HttpConfig;
+use crate::utils::progress_reader::{AsyncProgressReader, ProgressReader};
+use crate::utils::stream_with_callback::StreamCallbackExt;
 use async_trait::async_trait;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use reqwest::{Client, Method, Proxy, Response, Url};
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::compat::FuturesAsyncReadCompatExt;
+
+fn send_monitor_event(
+    monitor: Arc<dyn Monitor>,
+    url: &String,
+    stage: EventStage,
+    progress_values: Option<(u64, u64, u64)>,
+) {
+    let mut progress_option: Option<Progress> = None;
+    if progress_values.is_some() {
+        let values = progress_values.unwrap();
+        progress_option = Some(Progress {
+            value: values.0,
+            total: values.1,
+            delta: values.2,
+        })
+    }
+    let monitor_http_data = progress_option.map(|progress| MonitorHttpData { progress });
+    let event = MonitorEvent::Http {
+        stage,
+        url: url.to_string(),
+        data: monitor_http_data,
+    };
+    monitor.send(event);
+}
 
 pub struct ReqwestBackend {
     encryption_provider: Option<Arc<dyn EncryptionProvider>>,
@@ -122,7 +153,7 @@ impl ReqwestBackend {
         ))
     }
 
-    async fn extract_cookies(&self, response: &reqwest::Response) -> Result<(), HttpClientError> {
+    async fn extract_cookies(&self, response: &Response) -> Result<(), HttpClientError> {
         if let Some(url) = response.url().host_str() {
             let cookie_store = self.cookie_store.as_ref();
             if cookie_store.is_none() {
@@ -261,9 +292,16 @@ impl HttpClient for ReqwestBackend {
     }
 
     async fn execute(&self, endpoint: HttpEndpoint) -> Result<HttpResponse, HttpClientError> {
+        let url = endpoint.build_url();
         let requires_decryption = endpoint.requires_decryption;
 
-        let response = self.do_execute(endpoint).await?;
+        monitoring(|monitor| {
+            send_monitor_event(monitor, &url, EventStage::Started, None);
+        });
+
+        let response = self.do_execute(endpoint).await.inspect_err(|e| {
+            monitoring(|monitor| send_monitor_event(monitor, &url, EventStage::Failed, None));
+        })?;
         let status = response.status().as_u16();
         let headers: Vec<(String, String)> = response
             .headers()
@@ -271,11 +309,61 @@ impl HttpClient for ReqwestBackend {
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
-        let mut body = response
-            .bytes()
-            .await
-            .map_err(|e| HttpClientError::Network(e.to_string()))?
-            .to_vec();
+        let mut body: Vec<u8>;
+        let content_length = response.content_length();
+        if content_length.is_some() {
+            let stream = response.bytes_stream();
+            let stream = stream
+                .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))
+                .inspect_err(|e| {
+                    monitoring(|monitor| {
+                        send_monitor_event(monitor, &url, EventStage::Failed, None)
+                    });
+                });
+            let async_read = stream.into_async_read();
+            let tokio_async_read = async_read.compat();
+
+            let cloned_url = url.clone();
+            let mut reader = AsyncProgressReader::new(
+                tokio_async_read,
+                content_length.unwrap(),
+                move |read, total, delta| {
+                    monitoring(|monitor| {
+                        send_monitor_event(
+                            monitor,
+                            &cloned_url,
+                            EventStage::Running,
+                            Some((read, total, delta)),
+                        );
+                    });
+                },
+            );
+            body = Vec::new();
+
+            tokio::io::copy(&mut reader, &mut body)
+                .await
+                .map_err(|e| HttpClientError::Network(e.to_string()))
+                .inspect_err(|e| {
+                    monitoring(|monitor| {
+                        send_monitor_event(monitor, &url, EventStage::Failed, None)
+                    });
+                })?;
+        } else {
+            body = response
+                .bytes()
+                .await
+                .map_err(|e| HttpClientError::Network(e.to_string()))
+                .inspect_err(|e| {
+                    monitoring(|monitor| {
+                        send_monitor_event(monitor, &url, EventStage::Failed, None);
+                    });
+                })?
+                .to_vec();
+        }
+
+        monitoring(|monitor| {
+            send_monitor_event(monitor, &url, EventStage::Finished, None);
+        });
 
         if requires_decryption {
             body = self.decryption_provider.as_ref().unwrap().decrypt(&body)?;
@@ -292,17 +380,56 @@ impl HttpClient for ReqwestBackend {
         &self,
         endpoint: HttpEndpoint,
     ) -> Result<HttpStreamResponse, HttpClientError> {
-        let response = self.do_execute(endpoint).await?;
+        let url = endpoint.build_url();
+
+        monitoring(|monitor| {
+            send_monitor_event(monitor, &url, EventStage::Started, None);
+        });
+
+        let response = self.do_execute(endpoint).await.inspect_err(|e| {
+            monitoring(|monitor| {
+                send_monitor_event(monitor, &url, EventStage::Failed, None);
+            });
+        })?;
         let status = response.status().as_u16();
         let headers: Vec<(String, String)> = response
             .headers()
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
-        let stream = response.bytes_stream();
-        let stream = stream.map_err(|e| HttpClientError::Network(e.to_string()));
-        let stream = Box::pin(stream);
+        let content_length = response.content_length();
 
+        let cloned_url = url.clone();
+        let stream = response
+            .bytes_stream()
+            .map_err(|e| HttpClientError::Network(e.to_string()))
+            .on_complete(move || {
+                monitoring(|monitor| {
+                    send_monitor_event(monitor, &cloned_url, EventStage::Finished, None)
+                })
+            });
+
+        if content_length.is_some() {
+            let stream = stream.inspect_ok(move |data| {
+                let length = data.len() as u64;
+                monitoring(|monitor| {
+                    send_monitor_event(
+                        monitor,
+                        &url,
+                        EventStage::Running,
+                        Some((0u64, content_length.unwrap(), length)),
+                    );
+                });
+            });
+            let stream = Box::pin(stream);
+            return Ok(HttpStreamResponse {
+                status,
+                headers,
+                stream,
+            });
+        }
+
+        let stream = Box::pin(stream);
         Ok(HttpStreamResponse {
             status,
             headers,

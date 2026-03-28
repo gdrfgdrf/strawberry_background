@@ -4,6 +4,7 @@ use crate::service::service_runtime::{InitError, ServiceRuntime};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use crate::domain::traits::monitor_traits::Monitor;
 
 pub struct ServiceExporterFfiAdapter {
     runtime: Arc<ServiceRuntime>,
@@ -25,15 +26,17 @@ impl ServiceExporterFfiAdapter {
 
 pub fn create_service_exporter_ffi_adapter(
     config: RuntimeConfig,
+    monitor: Option<Arc<dyn Monitor>>,
 ) -> Result<ServiceExporterFfiAdapter, InitError> {
-    let runtime = ServiceRuntime::initialize(config)?;
+    let runtime = ServiceRuntime::initialize(config, monitor)?;
     Ok(ServiceExporterFfiAdapter::new(runtime))
 }
 
 pub fn create_service_exporter_ffi_adapter_with_tokio_runtime(
     config: RuntimeConfig,
     tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
+    monitor: Option<Arc<dyn Monitor>>,
 ) -> Result<ServiceExporterFfiAdapter, InitError> {
-    let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime)?;
+    let runtime = ServiceRuntime::with_tokio_runtime(config, tokio_runtime, monitor)?;
     Ok(ServiceExporterFfiAdapter::new(runtime))
 }

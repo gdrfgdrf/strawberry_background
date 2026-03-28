@@ -6,6 +6,7 @@ use crate::domain::models::storage_models::{ReadFile, StorageError, WriteFile};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::file_cache_traits::FileCacheManagerFactory;
 use crate::domain::traits::http_traits::HttpClient;
+use crate::domain::traits::monitor_traits::Monitor;
 use crate::domain::traits::storage_traits::StorageManager;
 use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
@@ -47,10 +48,14 @@ pub struct ServiceRuntime {
     pub cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>>,
     pub storage_manager: Option<Arc<dyn StorageManager>>,
     pub file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>>,
+    pub monitor: Option<Arc<dyn Monitor>>,
 }
 
 impl ServiceRuntime {
-    pub fn initialize(config: RuntimeConfig) -> Result<Arc<Self>, InitError> {
+    pub fn initialize(
+        config: RuntimeConfig,
+        monitor: Option<Arc<dyn Monitor>>,
+    ) -> Result<Arc<Self>, InitError> {
         let tokio_runtime = Self::create_tokio_runtime(config.tokio)?;
 
         let cookie_store_initialization =
@@ -102,12 +107,14 @@ impl ServiceRuntime {
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
             file_cache_manager_factory: optional_file_cache_manager_factory,
+            monitor,
         }))
     }
 
     pub fn with_tokio_runtime(
         config: RuntimeConfig,
         tokio_runtime: Arc<AssertUnwindSafe<Runtime>>,
+        monitor: Option<Arc<dyn Monitor>>,
     ) -> Result<Arc<Self>, InitError> {
         let cookie_store_initialization =
             Self::initialize_cookie_store(&tokio_runtime, config.cookie);
@@ -158,6 +165,7 @@ impl ServiceRuntime {
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
             file_cache_manager_factory: optional_file_cache_manager_factory,
+            monitor,
         }))
     }
 
@@ -195,6 +203,17 @@ impl ServiceRuntime {
         self.available_runtime().spawn(future)
     }
 
+    fn send_monitor_event<F>(&self, func: F)
+    where
+        F: FnOnce(Arc<dyn Monitor>),
+    {
+        if self.monitor.is_none() {
+            return;
+        }
+        let monitor = self.monitor.as_ref().unwrap();
+        func(monitor.clone())
+    }
+
     pub fn execute_http(
         &self,
         endpoint: HttpEndpoint,
@@ -202,7 +221,6 @@ impl ServiceRuntime {
         if self.http_client.is_none() {
             return Err(ServiceError::NotConfigured("Http Client".to_string()));
         }
-
         let client = self.http_client.as_ref().unwrap().clone();
         Ok(self.execute_async(async move { client.execute(endpoint).await }))
     }
