@@ -10,6 +10,9 @@ pub struct ServiceExporterFfiAdapter {
     runtime: Arc<ServiceRuntime>,
 }
 
+unsafe impl Sync for ServiceExporterFfiAdapter {}
+unsafe impl Send for ServiceExporterFfiAdapter {}
+
 impl ServiceExporterFfiAdapter {
     pub fn new(runtime: Arc<ServiceRuntime>) -> Self {
         Self { runtime }
