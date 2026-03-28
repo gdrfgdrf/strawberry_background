@@ -38,7 +38,7 @@ where
 }
 
 pub fn subscribe(
-    func: Box<dyn Fn(Arc<MonitorEvent>)>,
+    func: Box<dyn Fn(Arc<MonitorEvent>) + Send + Sync>,
 ) -> Result<Arc<dyn MonitorSubscriber>, MonitorError> {
     let service = MONITOR_SERVICE.read();
     if service.is_err() {
