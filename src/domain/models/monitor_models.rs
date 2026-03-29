@@ -21,11 +21,21 @@ pub enum MonitorEvent {
         url: String,
         data: Option<MonitorHttpData>
     },
+    Storage {
+        stage: EventStage,
+        path: String,
+        data: Option<MonitorStorageData>
+    }
 }
 
 #[derive(Clone)]
 pub struct MonitorHttpData {
     pub progress: Progress,
+}
+
+#[derive(Clone)]
+pub struct MonitorStorageData {
+    pub progress: Progress
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
