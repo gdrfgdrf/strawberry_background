@@ -6,6 +6,7 @@ pub mod utils;
 pub mod rkyv;
 pub mod superstructure;
 pub mod monitor;
+pub mod rkv;
 
 use crate::service::config::RuntimeConfig;
 use crate::service::service_exporter::ServiceExporter;

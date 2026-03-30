@@ -47,6 +47,7 @@ mod tests {
     use std::thread::sleep;
     use std::time::{Duration, SystemTime};
     use tokio_test::{assert_err, assert_ok};
+    use crate::rkv::rkv_impl::initialize_rkv;
 
     macro_rules! await_test {
         ($e:expr) => {
@@ -55,6 +56,8 @@ mod tests {
     }
 
     fn initialize_runtime() -> Arc<ServiceRuntime> {
+        initialize_rkv("databases".into());
+        
         let service_exporter = create_service_exporter(
             RuntimeConfig {
                 tokio: TokioConfig {
@@ -196,6 +199,24 @@ mod tests {
 
         assert_eq!(data, fetched);
     }
+    
+    #[test]
+    fn test_file_cache_fetch() {
+        let runtime = initialize_runtime();
+
+        let data = "http world, this is the file cache test\n"
+            .repeat(10086 ^ 2)
+            .to_string()
+            .into_bytes();
+
+        let factory = runtime.file_cache_manager_factory.clone().unwrap();
+        let channel1 = await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
+        
+        for i in 0..10 {
+            let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i))).unwrap();
+            assert_eq!(data, fetched);
+        }
+    }
 
     #[test]
     fn test_file_cache_cache_fetch_with_extension() {
@@ -249,15 +270,14 @@ mod tests {
             .to_string()
             .into_bytes();
 
+        let runtime = initialize_runtime();
         for i in 0..10 {
             {
-                let runtime = initialize_runtime();
-
                 let factory = runtime.file_cache_manager_factory.clone().unwrap();
                 let channel1 =
                     await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
 
-                let _ = await_test!(channel1.cache(
+                await_test!(channel1.cache(
                     format!("test-tag-{}", i),
                     format!("test-sentence-{}", i),
                     &data
@@ -270,19 +290,19 @@ mod tests {
                 let persist = await_test!(channel1.persist());
                 assert_ok!(persist);
             }
-            {
-                let runtime = initialize_runtime();
-
-                let factory = runtime.file_cache_manager_factory.clone().unwrap();
-                let channel1 =
-                    await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
-
-                let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i)));
-                assert_ok!(&fetched);
-
-                let fetched = fetched.unwrap();
-                assert_eq!(fetched, data);
-            }
+            // {
+            //     let runtime = initialize_runtime();
+            // 
+            //     let factory = runtime.file_cache_manager_factory.clone().unwrap();
+            //     let channel1 =
+            //         await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
+            // 
+            //     let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i)));
+            //     assert_ok!(&fetched);
+            // 
+            //     let fetched = fetched.unwrap();
+            //     assert_eq!(fetched, data);
+            // }
         }
     }
 

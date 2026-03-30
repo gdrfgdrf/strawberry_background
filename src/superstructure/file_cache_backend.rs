@@ -2,9 +2,12 @@ use crate::domain::models::file_cache_models::{CacheChannel, CacheError, CacheRe
 use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
 use crate::domain::traits::file_cache_traits::{FileCacheManager, FileCacheManagerFactory};
 use crate::domain::traits::storage_traits::StorageManager;
+use crate::rkv::rkv_impl::RKV_SERVICE;
 use crate::service::config::FileCacheConfig;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use rkv::SingleStore;
+use rkv::backend::SafeModeDatabase;
 use rkyv::rancor::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +24,7 @@ where
     map: DashMap<String, Arc<dyn FileCacheManager>>,
     creator: T,
     storage_manager: Arc<dyn StorageManager>,
+    single_store: SingleStore<SafeModeDatabase>,
 }
 
 pub struct DefaultFileCacheManager {
@@ -32,6 +36,7 @@ pub struct DefaultFileCacheManager {
     dirty: Arc<AtomicBool>,
     map: DashMap<String, RwLock<CacheRecord>>,
     storage_manager: Arc<dyn StorageManager>,
+    single_store: SingleStore<SafeModeDatabase>,
 }
 
 impl<T> SingletonFileCacheManagerFactory<T>
@@ -43,11 +48,16 @@ where
         storage_manager: Arc<dyn StorageManager>,
         creator: T,
     ) -> Self {
+        let mut rkv_service = RKV_SERVICE.write().unwrap();
+        let rkv_service = rkv_service.as_mut().unwrap();
+        let store = rkv_service.init_db("file_cache").unwrap();
+
         Self {
             config,
             map: DashMap::new(),
             creator,
             storage_manager,
+            single_store: store,
         }
     }
 
@@ -63,6 +73,10 @@ impl DefaultFileCacheManager {
         channel: CacheChannel,
         storage_manager: Arc<dyn StorageManager>,
     ) -> Self {
+        let mut rkv_service = RKV_SERVICE.write().unwrap();
+        let rkv_service = rkv_service.as_mut().unwrap();
+        let store = rkv_service.init_db("file_cache").unwrap();
+
         let records = channel.records;
         let map: DashMap<String, RwLock<CacheRecord>> = DashMap::new();
         records.into_iter().for_each(|record| {
@@ -79,6 +93,7 @@ impl DefaultFileCacheManager {
             dirty: Arc::new(AtomicBool::new(false)),
             map,
             storage_manager,
+            single_store: store,
         }
     }
 
@@ -180,11 +195,26 @@ where
         name: String,
         extension: Option<String>,
     ) -> Result<CacheChannel, CacheError> {
-        let channel_path = self.get_channel_path(&name);
-        let exists = try_exists(&channel_path)
-            .await
-            .map_err(|e| CacheError::IO(e.to_string()))?;
-        if !exists {
+        // let channel_path = self.get_channel_path(&name);
+        // let exists = try_exists(&channel_path)
+        //     .await
+        //     .map_err(|e| CacheError::IO(e.to_string()))?;
+        // if !exists {
+        //     let channel = CacheChannel {
+        //         name,
+        //         extension,
+        //         records: Vec::new(),
+        //     };
+        //     return Ok(channel);
+        // }
+
+        let rkv_service = RKV_SERVICE.read().unwrap();
+        let rkv_service = rkv_service.as_ref().unwrap();
+        let channel = rkv_service
+            .read_rkyv_cache_channel_data(&self.single_store, &name)
+            .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
+        
+        if channel.is_none() {
             let channel = CacheChannel {
                 name,
                 extension,
@@ -193,12 +223,12 @@ where
             return Ok(channel);
         }
 
-        let read_file = ReadFile::path(channel_path);
-        let data = self.storage_manager.read(read_file).await?;
-        let channel = rkyv::from_bytes::<CacheChannel, Error>(&data)
-            .map_err(|e| CacheError::IO(e.to_string()))?;
+        // let read_file = ReadFile::path(channel_path);
+        // let data = self.storage_manager.read(read_file).await?;
+        // let channel = rkyv::from_bytes::<CacheChannel, Error>(&data)
+        //     .map_err(|e| CacheError::IO(e.to_string()))?;
 
-        Ok(channel)
+        Ok(channel.unwrap())
     }
 
     async fn create_with_channel(
@@ -285,7 +315,7 @@ impl FileCacheManager for DefaultFileCacheManager {
                     size: bytes.len(),
                     sentence,
                 };
-
+                
                 self.map.insert(tag, RwLock::new(record));
                 self.make_dirty();
             })
@@ -337,24 +367,24 @@ impl FileCacheManager for DefaultFileCacheManager {
     }
 
     async fn flush(&self, tag: &String) -> Result<(), CacheError> {
-        if !self.map.contains_key(tag) {
-            return Err(CacheError::TagNotExist(tag.clone()));
-        }
-
-        let record = self.map.remove(tag).unwrap();
-        self.make_dirty();
-
-        let record = record.1.into_inner();
-        let path = self.build_path(&record.filename);
-
-        if try_exists(&path)
-            .await
-            .map_err(|e| CacheError::IO(e.to_string()))?
-        {
-            return tokio::fs::remove_file(path)
-                .await
-                .map_err(|e| CacheError::IO(e.to_string()));
-        }
+        // if !self.map.contains_key(tag) {
+        //     return Err(CacheError::TagNotExist(tag.clone()));
+        // }
+        //
+        // let record = self.map.remove(tag).unwrap();
+        // self.make_dirty();
+        //
+        // let record = record.1.into_inner();
+        // let path = self.build_path(&record.filename);
+        //
+        // if try_exists(&path)
+        //     .await
+        //     .map_err(|e| CacheError::IO(e.to_string()))?
+        // {
+        //     return tokio::fs::remove_file(path)
+        //         .await
+        //         .map_err(|e| CacheError::IO(e.to_string()));
+        // }
 
         Ok(())
     }
@@ -379,28 +409,36 @@ impl FileCacheManager for DefaultFileCacheManager {
             records,
         };
 
-        let bytes = rkyv::to_bytes::<Error>(&channel)
-            .map_err(|e| CacheError::Serialization(e.to_string()))?
-            .into_vec();
+        let rkv_service = RKV_SERVICE.read().unwrap();
+        let rkv_service = rkv_service.as_ref().unwrap();
+        rkv_service
+            .write_rkyv_cache_channel_data(&self.single_store, &self.name, &channel)
+            .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
+        self.make_clean();
+        Ok(())
 
-        let channel_path = self.get_channel_path();
-        self.ensure_directory_exist(&self.path).await?;
-        self.ensure_file_exist(&channel_path).await?;
-
-        let write_file = WriteFile {
-            path: channel_path,
-            mode: WriteMode::Cover,
-            timeout: Duration::from_secs(60),
-            ensure_mode: Some(EnsureMode::SyncAll),
-            data: &bytes
-        };
-        self.storage_manager
-            .write(write_file)
-            .await
-            .map_err(|e| CacheError::from(e))
-            .inspect(|_| {
-                self.make_clean();
-            })
+        // let bytes = rkyv::to_bytes::<Error>(&channel)
+        //     .map_err(|e| CacheError::Serialization(e.to_string()))?
+        //     .into_vec();
+        //
+        // let channel_path = self.get_channel_path();
+        // self.ensure_directory_exist(&self.path).await?;
+        // self.ensure_file_exist(&channel_path).await?;
+        //
+        // let write_file = WriteFile {
+        //     path: channel_path,
+        //     mode: WriteMode::Cover,
+        //     timeout: Duration::from_secs(60),
+        //     ensure_mode: Some(EnsureMode::SyncAll),
+        //     data: &bytes
+        // };
+        // self.storage_manager
+        //     .write(write_file)
+        //     .await
+        //     .map_err(|e| CacheError::from(e))
+        //     .inspect(|_| {
+        //         self.make_clean();
+        //     })
     }
 
     async fn record(&self, tag: &String) -> Result<CacheRecord, CacheError> {

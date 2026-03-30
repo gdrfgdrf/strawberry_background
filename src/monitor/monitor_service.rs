@@ -2,7 +2,7 @@ use crate::domain::models::monitor_models::{MonitorError, MonitorEvent};
 use crate::domain::traits::monitor_traits::{Monitor, MonitorSubscriber};
 use crate::infrastructure::monitor::mpsc_monitor_backend::MpscMonitorBackend;
 use std::cell::OnceCell;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 use tokio::runtime::Runtime;
 
 pub static MONITOR_SERVICE: RwLock<Option<MonitorService>> = RwLock::new(None);
