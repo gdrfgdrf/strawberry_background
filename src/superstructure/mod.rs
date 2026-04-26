@@ -1,2 +1,2 @@
 pub mod file_cache_backend;
-pub mod download_coordinator;
+pub mod coordinator;

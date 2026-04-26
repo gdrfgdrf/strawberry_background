@@ -28,23 +28,28 @@ pub fn create_service_exporter_with_tokio_runtime(
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Deref;
-    use crate::domain::models::download_coordinator_models::{CategorizerError, CoordinatorConfiguration, Identifier, Priority, Request, RunnerConfiguration, RunnerError, RunnerSnapshot, RunnerStatus};
+    use crate::domain::models::coordinator_models::{
+        CategorizerError, CoordinatorConfiguration, Identifier, Priority, Request,
+        RunnerConfiguration, RunnerError, RunnerSnapshot, RunnerStatus,
+    };
     use crate::domain::models::http_models::{HttpEndpoint, HttpMethod};
     use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
-    use crate::domain::traits::download_coordinator_traits::{Categorizer, Coordinator, Runner, RunnerWatcher};
+    use crate::domain::traits::coordinator_traits::{
+        Categorizer, Coordinator, Runner, RunnerWatcher,
+    };
     use crate::rkv::rkv_impl::initialize_rkv;
     use crate::service::config::{
         CookieConfig, FileCacheChannelConfig, FileCacheConfig, HttpConfig, RuntimeConfig,
     };
     use crate::service::service_exporter::create_service_exporter_with_tokio_runtime;
     use crate::service::service_runtime::ServiceRuntime;
-    use crate::superstructure::download_coordinator::coordinator::DefaultCoordinator;
-    use crate::superstructure::download_coordinator::registry::RunnerRegistry;
+    use crate::superstructure::coordinator::coordinator::DefaultCoordinator;
+    use crate::superstructure::coordinator::registry::RunnerRegistry;
+    use parking_lot::Mutex;
+    use std::ops::Deref;
     use std::sync::Arc;
     use std::thread::sleep;
     use std::time::{Duration, SystemTime};
-    use parking_lot::Mutex;
     use tokio::runtime::Runtime;
     use tokio_test::{assert_err, assert_ok};
     use tokio_util::sync::CancellationToken;
@@ -356,7 +361,7 @@ mod tests {
                     id: "Runner-2".to_string(),
                 },
                 accepted_categories: Some(vec![
-                    "second-request-requires-specific-runner".to_string()
+                    "second-request-requires-specific-runner".to_string(),
                 ]),
             };
             let runner_1 = Arc::new(TestRunner {
@@ -366,7 +371,7 @@ mod tests {
                 configuration: runner_configuration_1,
                 status: Mutex::new(RunnerStatus::Idle),
                 test_cycle_count: Mutex::new(0),
-                test_cycle_threshold: 10
+                test_cycle_threshold: 10,
             });
             let runner_2 = Arc::new(TestRunner {
                 identifier: Identifier {
@@ -375,13 +380,13 @@ mod tests {
                 configuration: runner_configuration_2,
                 status: Mutex::new(RunnerStatus::Idle),
                 test_cycle_count: Mutex::new(0),
-                test_cycle_threshold: 5
+                test_cycle_threshold: 5,
             });
 
             let mut registry = RunnerRegistry::singleton().write();
             registry.put_runner(runner_1);
             registry.put_runner(runner_2);
-            
+
             println!("runners are registered")
         }
 
@@ -393,7 +398,7 @@ mod tests {
         let coordinator = DefaultCoordinator::new(categorizer, coordinator_configuration);
         let coordinator_clone_1 = coordinator.clone();
         let coordinator_clone_2 = coordinator.clone();
-        
+
         let cycler_cancellation_token_owned = Arc::new(CancellationToken::new());
         let cycler_cancellation_token_cloned = cycler_cancellation_token_owned.clone();
         let queuer_cancellation_token_owned = Arc::new(CancellationToken::new());
@@ -402,48 +407,56 @@ mod tests {
         println!("starting cycler thread");
         std::thread::spawn(move || {
             println!("cycler thread started");
-            coordinator_clone_1.cycler_thread_entrypoint(&cycler_cancellation_token_cloned, |err| {
-                println!("cycler err: {}", err)
-            });
+            coordinator_clone_1
+                .cycler_thread_entrypoint(&cycler_cancellation_token_cloned, |err| {
+                    println!("cycler err: {}", err)
+                });
         });
         println!("starting queuer thread");
         std::thread::spawn(move || {
             println!("queuer thread started");
-            coordinator_clone_2.queuer_thread_entrypoint(&queuer_cancellation_token_cloned, |err| {
-                println!("queuer err: {}", err)
-            });
+            coordinator_clone_2
+                .queuer_thread_entrypoint(&queuer_cancellation_token_cloned, |err| {
+                    println!("queuer err: {}", err)
+                });
         });
-        
+
         println!("sleep for 3 seconds");
         sleep(Duration::from_secs(3));
-        
+
         println!("putting a request 1");
         let request = Request {
-            identifier: Identifier { id: "first-request".to_string() },
+            identifier: Identifier {
+                id: "first-request".to_string(),
+            },
             priority: Priority::Normal { order: None },
             retry_strategy: None,
             post_retry_strategy: None,
-            timeout: None
+            timeout: None,
         };
         coordinator.put(request).unwrap();
 
         println!("putting a request 2");
         let request = Request {
-            identifier: Identifier { id: "second-request".to_string() },
+            identifier: Identifier {
+                id: "second-request".to_string(),
+            },
             priority: Priority::Normal { order: None },
             retry_strategy: None,
             post_retry_strategy: None,
-            timeout: None
+            timeout: None,
         };
         coordinator.put(request).unwrap();
-        
+
         println!("putting a request 3");
         let request = Request {
-            identifier: Identifier { id: "third-request".to_string() },
+            identifier: Identifier {
+                id: "third-request".to_string(),
+            },
             priority: Priority::Normal { order: None },
             retry_strategy: None,
             post_retry_strategy: None,
-            timeout: None
+            timeout: None,
         };
         coordinator.put(request).unwrap();
 
@@ -453,7 +466,7 @@ mod tests {
         cycler_cancellation_token_owned.cancel();
         println!("cancelling queuer");
         queuer_cancellation_token_owned.cancel();
-        
+
         sleep(Duration::from_secs(30))
     }
 
@@ -463,7 +476,7 @@ mod tests {
         configuration: RunnerConfiguration,
         status: Mutex<RunnerStatus>,
         test_cycle_count: Mutex<usize>,
-        test_cycle_threshold: usize
+        test_cycle_threshold: usize,
     }
 
     impl Categorizer for TestCategorizer {
@@ -487,14 +500,12 @@ mod tests {
 
         fn cycle_once(&self) -> Result<RunnerSnapshot, RunnerError> {
             println!("Runner {}: cycle once", self.identifier);
-            
-            let mut status = {
-                self.status.lock().clone()
-            };
+
+            let mut status = { self.status.lock().clone() };
             if status == RunnerStatus::Busy {
                 let mut current = self.test_cycle_count.lock();
                 *current = current.clone() + 1;
-                
+
                 if current.clone() >= self.test_cycle_threshold {
                     println!("Runner {}: change status to idle", self.identifier);
                     *self.status.lock() = RunnerStatus::Idle;
@@ -502,7 +513,7 @@ mod tests {
                     *current = 0;
                 }
             }
-            
+
             Ok(RunnerSnapshot {
                 identifier: self.identifier.clone(),
                 retry_count: None,

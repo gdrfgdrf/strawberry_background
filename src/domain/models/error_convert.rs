@@ -1,5 +1,5 @@
 use std::sync::PoisonError;
-use crate::domain::models::download_coordinator_models::{CategorizerError, CoordinatorError, DiscoverError, QueuerError, RegistryError};
+use crate::domain::models::coordinator_models::{CategorizerError, CoordinatorError, DiscoverError, QueuerError, RegistryError};
 use crate::domain::models::file_cache_models::CacheError;
 use crate::domain::models::storage_models::StorageError;
 use crate::utils::waiter::TimeoutError;

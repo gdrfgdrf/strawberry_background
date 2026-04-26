@@ -4,4 +4,4 @@ pub mod storage_traits;
 pub mod file_cache_traits;
 pub mod audio_traits;
 pub mod monitor_traits;
-pub mod download_coordinator_traits;
+pub mod coordinator_traits;
