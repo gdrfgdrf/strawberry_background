@@ -1,5 +1,5 @@
 use crate::domain::models::file_cache_models::{CacheChannel, CacheError, CacheRecord};
-use crate::domain::models::storage_models::{EnsureMode, ReadFile, WriteFile, WriteMode};
+use crate::domain::models::storage_models::{ReadFile, WriteFile, WriteMode};
 use crate::domain::traits::file_cache_traits::{FileCacheManager, FileCacheManagerFactory};
 use crate::domain::traits::storage_traits::StorageManager;
 use crate::rkv::rkv_impl::RKV_SERVICE;
@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use rkv::SingleStore;
 use rkv::backend::SafeModeDatabase;
-use rkyv::rancor::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -60,10 +59,6 @@ where
             single_store: store,
         }
     }
-
-    fn get_channel_path(&self, name: &String) -> String {
-        format!("{}/{}/channel.rkyv", self.config.base_path, name)
-    }
 }
 
 impl DefaultFileCacheManager {
@@ -96,11 +91,7 @@ impl DefaultFileCacheManager {
             single_store: store,
         }
     }
-
-    fn get_channel_path(&self) -> String {
-        format!("{}/channel.rkyv", self.path)
-    }
-
+    
     fn build_path(&self, filename: &String) -> String {
         if self.extension.is_some() {
             return format!(

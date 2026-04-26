@@ -11,7 +11,7 @@ use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::infrastructure::storage::storage_backend::AsyncStorageManager;
 use crate::service::config::{
-    CookieConfig, FileCacheConfig, HttpConfig, RuntimeConfig, TokioConfig,
+    CookieConfig, FileCacheConfig, HttpConfig, RuntimeConfig,
 };
 use crate::superstructure::file_cache_backend::{
     DefaultFileCacheManager, SingletonFileCacheManagerFactory,
@@ -40,8 +40,7 @@ pub enum ServiceError {
 }
 
 pub struct ServiceRuntime {
-    pub tokio_runtime: Option<Runtime>,
-    pub provided_tokio_runtime: Option<Arc<Runtime>>,
+    pub tokio_runtime: Arc<Runtime>,
     pub http_client: Option<Arc<dyn HttpClient>>,
     pub cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>>,
     pub storage_manager: Option<Arc<dyn StorageManager>>,
@@ -49,63 +48,6 @@ pub struct ServiceRuntime {
 }
 
 impl ServiceRuntime {
-    pub fn initialize(
-        config: RuntimeConfig,
-    ) -> Result<Arc<Self>, InitError> {
-        let tokio_runtime = Self::create_tokio_runtime(config.tokio)?;
-
-        let cookie_store_initialization =
-            Self::initialize_cookie_store(&tokio_runtime, config.cookie);
-        let optional_cookie_store_initialization: Option<(
-            Arc<dyn CookieStore>,
-            Arc<Mutex<JoinHandle<()>>>,
-        )>;
-        if cookie_store_initialization.is_ok() {
-            optional_cookie_store_initialization = Some(cookie_store_initialization?);
-        } else {
-            optional_cookie_store_initialization = None;
-        }
-
-        let mut cookie_store: Option<Arc<dyn CookieStore>> = None;
-        let mut cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>> = None;
-
-        if optional_cookie_store_initialization.is_some() {
-            let cookie_store_initialize = optional_cookie_store_initialization.unwrap();
-            cookie_store = Some(cookie_store_initialize.0);
-            cookie_auto_save_handle = Some(cookie_store_initialize.1);
-        }
-
-        let http_client = if let Some(http_config) = config.http {
-            let http_client = Self::create_http_client(http_config, cookie_store)?;
-            Some(http_client)
-        } else {
-            None
-        };
-
-        let storage_manager = Self::create_storage_manager()?;
-        let file_cache_manager_factory = Self::initialize_file_cache(
-            &tokio_runtime,
-            config.file_cache_config,
-            storage_manager.clone(),
-        );
-        let optional_file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>>;
-        if file_cache_manager_factory.is_ok() {
-            optional_file_cache_manager_factory = Some(file_cache_manager_factory?);
-        } else {
-            println!("{}", file_cache_manager_factory.err().unwrap());
-            optional_file_cache_manager_factory = None;
-        }
-
-        Ok(Arc::new(Self {
-            tokio_runtime: Some(tokio_runtime),
-            provided_tokio_runtime: None,
-            http_client,
-            cookie_auto_save_handle,
-            storage_manager: Some(storage_manager),
-            file_cache_manager_factory: optional_file_cache_manager_factory,
-        }))
-    }
-
     pub fn with_tokio_runtime(
         config: RuntimeConfig,
         tokio_runtime: Arc<Runtime>,
@@ -153,8 +95,7 @@ impl ServiceRuntime {
         }
 
         Ok(Arc::new(Self {
-            tokio_runtime: None,
-            provided_tokio_runtime: Some(tokio_runtime),
+            tokio_runtime,
             http_client,
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
@@ -162,14 +103,8 @@ impl ServiceRuntime {
         }))
     }
 
-    pub fn available_runtime(&self) -> &Runtime {
-        if self.tokio_runtime.is_some() {
-            return self.tokio_runtime.as_ref().unwrap();
-        }
-        if self.provided_tokio_runtime.is_some() {
-            return self.provided_tokio_runtime.as_ref().unwrap();
-        }
-        panic!("no available runtime")
+    pub fn available_runtime(&self) -> Arc<Runtime> {
+        self.tokio_runtime.clone()
     }
 
     pub fn execute_block<F, R>(&self, future: F) -> R
@@ -412,29 +347,6 @@ impl ServiceRuntime {
         };
 
         Ok((cookie_store.unwrap(), cookie_auto_save_handle.unwrap()))
-    }
-
-    fn create_tokio_runtime(tokio_config: TokioConfig) -> Result<Runtime, InitError> {
-        let mut builder = tokio::runtime::Builder::new_multi_thread();
-
-        if let Some(threads) = tokio_config.worker_threads {
-            builder.worker_threads(threads);
-        }
-        if let Some(stack_size) = tokio_config.thread_stack_size {
-            builder.thread_stack_size(stack_size);
-        }
-        if let Some(prefix) = tokio_config.thread_name_prefix {
-            builder.thread_name_fn(move || {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("{}-{}", prefix, id)
-            });
-        }
-
-        builder
-            .enable_all()
-            .build()
-            .map_err(|e| InitError::TokioInit(e.to_string()))
     }
 
     async fn create_cookie_store(

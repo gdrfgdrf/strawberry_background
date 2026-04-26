@@ -1,8 +1,6 @@
-use std::sync::Arc;
 use crate::utils::url_component::{encode_component, encode_query_component};
 use std::time::Duration;
 use bytes::Bytes;
-use futures_util::Stream;
 use futures_util::stream::BoxStream;
 
 #[derive(Debug, Clone)]
@@ -93,13 +91,13 @@ impl HttpEndpoint {
         let encoded: String = query_params
             .iter()
             .map(
-                (|(key, value)| {
+                |(key, value)| {
                     return format!(
                         "{}={}",
                         encode_query_component(key),
                         encode_query_component(value)
                     );
-                }),
+                },
             )
             .collect::<Vec<String>>()
             .join("&");

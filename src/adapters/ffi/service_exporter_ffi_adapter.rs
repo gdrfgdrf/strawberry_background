@@ -24,13 +24,6 @@ impl ServiceExporterFfiAdapter {
     }
 }
 
-pub fn create_service_exporter_ffi_adapter(
-    config: RuntimeConfig,
-) -> Result<ServiceExporterFfiAdapter, InitError> {
-    let runtime = ServiceRuntime::initialize(config)?;
-    Ok(ServiceExporterFfiAdapter::new(runtime))
-}
-
 pub fn create_service_exporter_ffi_adapter_with_tokio_runtime(
     config: RuntimeConfig,
     tokio_runtime: Arc<Runtime>,

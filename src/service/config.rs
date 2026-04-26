@@ -4,17 +4,9 @@ use crate::domain::models::cookie_models::Cookie;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider};
 
 pub struct RuntimeConfig {
-    pub tokio: TokioConfig,
     pub http: Option<HttpConfig>,
     pub cookie: Option<CookieConfig>,
     pub file_cache_config: Option<FileCacheConfig>
-}
-
-#[derive(Debug, Clone)]
-pub struct TokioConfig {
-    pub worker_threads: Option<usize>,
-    pub thread_stack_size: Option<usize>,
-    pub thread_name_prefix: Option<String>,
 }
 
 pub struct HttpConfig {
@@ -55,11 +47,6 @@ pub struct FileCacheChannelConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            tokio: TokioConfig {
-                worker_threads: None,
-                thread_stack_size: None,
-                thread_name_prefix: None,
-            },
             http: None,
             cookie: None,
             file_cache_config: None

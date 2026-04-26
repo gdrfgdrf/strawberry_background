@@ -3,9 +3,12 @@ use crate::domain::traits::monitor_traits::{Monitor, MonitorSubscriber};
 use crate::infrastructure::monitor::mpsc_monitor_backend::MpscMonitorBackend;
 use std::cell::OnceCell;
 use std::sync::{Arc, RwLock};
+use lazy_static::lazy_static;
 use tokio::runtime::Runtime;
 
-pub static MONITOR_SERVICE: RwLock<Option<MonitorService>> = RwLock::new(None);
+lazy_static! {
+    static ref MONITOR_SERVICE: RwLock<Option<MonitorService>> = RwLock::new(None);
+}
 
 pub fn initialize_monitor(tokio_runtime: Arc<Runtime>) {
     let guard = MONITOR_SERVICE.write();

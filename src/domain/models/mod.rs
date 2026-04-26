@@ -5,3 +5,4 @@ pub mod file_cache_models;
 pub mod audio_models;
 mod error_convert;
 pub mod monitor_models;
+pub mod download_coordinator_models;
