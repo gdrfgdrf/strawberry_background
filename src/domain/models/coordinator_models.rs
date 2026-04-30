@@ -104,7 +104,7 @@ pub struct Progress {
 
 pub struct Request {
     pub identifier: Identifier,
-    pub priority: Priority,
+    pub priority: Option<Priority>,
     pub retry_strategy: Option<RetryStrategy>,
     pub post_retry_strategy: Option<RetryStrategy>,
     pub timeout: Option<Duration>,
@@ -231,6 +231,15 @@ impl PartialOrd for Request {
 
 impl Ord for Request {
     fn cmp(&self, other: &Self) -> Ordering {
+        if self.priority.is_none() && other.priority.is_none() {
+            return Ordering::Equal
+        }
+        if self.priority.is_none() {
+            return Ordering::Less
+        }
+        if other.priority.is_none() {
+            return Ordering::Greater;
+        }
         self.priority.cmp(&other.priority)
     }
 }
@@ -238,5 +247,35 @@ impl Ord for Request {
 impl Hash for Identifier {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state)
+    }
+}
+
+impl Into<String> for Identifier {
+    fn into(self) -> String {
+        self.id
+    }
+}
+
+impl AsRef<String> for Identifier {
+    fn as_ref(&self) -> &String {
+        &self.id
+    }
+}
+
+impl AsRef<str> for Identifier {
+    fn as_ref(&self) -> &str {
+        &self.id
+    }
+}
+
+impl From<String> for Identifier {
+    fn from(value: String) -> Self {
+        Self { id: value }
+    }
+}
+
+impl From<&str> for Identifier {
+    fn from(value: &str) -> Self {
+        Self { id: value.into() }
     }
 }

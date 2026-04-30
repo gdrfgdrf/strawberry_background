@@ -65,7 +65,6 @@ impl DefaultCoordinator {
         arc_coordinator
     }
 
-    // no blocking in a cycle
     pub fn cycler_thread_entrypoint<T>(
         &self,
         cancellation_token: &Arc<CancellationToken>,
@@ -91,7 +90,6 @@ impl DefaultCoordinator {
         }
     }
 
-    // may have one or more blocking in a cycle
     pub fn queuer_thread_entrypoint<T>(
         &self,
         cancellation_token: &Arc<CancellationToken>,

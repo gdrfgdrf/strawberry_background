@@ -429,7 +429,7 @@ mod tests {
             identifier: Identifier {
                 id: "first-request".to_string(),
             },
-            priority: Priority::Normal { order: None },
+            priority: None,
             retry_strategy: None,
             post_retry_strategy: None,
             timeout: None,
@@ -441,7 +441,7 @@ mod tests {
             identifier: Identifier {
                 id: "second-request".to_string(),
             },
-            priority: Priority::Normal { order: None },
+            priority: None,
             retry_strategy: None,
             post_retry_strategy: None,
             timeout: None,
@@ -453,7 +453,7 @@ mod tests {
             identifier: Identifier {
                 id: "third-request".to_string(),
             },
-            priority: Priority::Normal { order: None },
+            priority: None,
             retry_strategy: None,
             post_retry_strategy: None,
             timeout: None,
