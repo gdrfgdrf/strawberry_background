@@ -11,7 +11,7 @@ use tokio::runtime::Runtime;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum BaseRunnerError {
-    #[error("Concurrency not available")]
+    #[error("Concurrency Limitation")]
     ConcurrencyLimitation,
 }
 
