@@ -36,6 +36,7 @@ rkv = "0.20.0"
 parking_lot = "0.12.5"
 strawberry_macros = { path = "strawberry_macros" }
 seqlock = "0.2.0"
+rand = "0.10.1"
 
 [dev-dependencies]
 tokio-test = "*"

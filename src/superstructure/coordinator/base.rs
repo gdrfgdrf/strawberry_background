@@ -1,9 +1,14 @@
 use crate::domain::models::coordinator_models::{
-    Identifier, Request, RunnerConfiguration, RunnerError, RunnerSnapshot, RunnerStatus,
+    Identifier, Request, RetryStrategy, RunnerConfiguration, RunnerError, RunnerSnapshot,
+    RunnerStatus,
 };
 use crate::domain::traits::coordinator_traits::{Runner, RunnerWatcher};
+use async_trait::async_trait;
 use bytes::Bytes;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
+use rand::RngExt;
+use rand::rngs::SmallRng;
+use std::cmp::min;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,8 +20,9 @@ pub enum BaseRunnerError {
     ConcurrencyLimitation,
 }
 
+#[async_trait]
 pub trait SimpleRunner: Send + Sync {
-    fn submit(&self, request: Request, tracker: RunnerTracker);
+    async fn submit(&self, request: &Request, tracker: &RunnerTracker) -> Result<(), RunnerError>;
 }
 
 pub struct BaseRunner {
@@ -29,13 +35,20 @@ pub struct BaseRunner {
 
 pub struct RunnerTracker {
     watcher: Arc<dyn RunnerWatcher>,
-    on_finished: Box<dyn FnOnce() + Send>,
+    on_finished: Box<dyn FnOnce() + Send + Sync>,
 }
 
 struct StatusManager {
     max_concurrency_count: usize,
     status: RwLock<RunnerStatus>,
     ongoing_request_count: AtomicUsize,
+}
+
+struct RequestRetryer {
+    inner: Arc<dyn SimpleRunner>,
+    request: Request,
+    tracker: RunnerTracker,
+    retry_count: Mutex<usize>,
 }
 
 impl BaseRunner {
@@ -93,7 +106,8 @@ impl Runner for BaseRunner {
             }),
         );
         self.tokio_runtime.spawn(async move {
-            inner.submit(request, tracker);
+            let retryer = RequestRetryer::new(inner, request, tracker);
+            retryer.start().await;
         });
 
         Ok(())
@@ -101,7 +115,7 @@ impl Runner for BaseRunner {
 }
 
 impl RunnerTracker {
-    fn new(watcher: Arc<dyn RunnerWatcher>, on_finished: Box<dyn FnOnce() + Send>) -> Self {
+    fn new(watcher: Arc<dyn RunnerWatcher>, on_finished: Box<dyn FnOnce() + Send + Sync>) -> Self {
         Self {
             watcher,
             on_finished,
@@ -172,5 +186,91 @@ impl StatusManager {
         drop(guard);
         let mut guard = self.status.write();
         *guard = target;
+    }
+}
+
+impl RequestRetryer {
+    pub fn new(inner: Arc<dyn SimpleRunner>, request: Request, tracker: RunnerTracker) -> Self {
+        Self {
+            inner,
+            request,
+            tracker,
+            retry_count: Mutex::new(0),
+        }
+    }
+
+    fn max_retry(&self) -> Option<usize> {
+        let strategy = &self.request.retry_strategy;
+        if strategy.is_none() {
+            return None;
+        }
+        let strategy = strategy.as_ref().unwrap();
+        match strategy {
+            RetryStrategy::RetryImmediately { max_retry } => max_retry.clone(),
+            RetryStrategy::RetryFixed { max_retry, .. } => max_retry.clone(),
+            RetryStrategy::RetryExponentialBackoff { max_retry, .. } => max_retry.clone(),
+        }
+    }
+
+    fn should_retry(&self) -> bool {
+        let max_retry = self.max_retry();
+        if max_retry.is_none() {
+            return false;
+        }
+
+        let mut lock = self.retry_count.lock();
+        *lock = *lock + 1;
+
+        let max_retry = max_retry.unwrap();
+        *lock <= max_retry
+    }
+
+    async fn sleep(&self) {
+        let strategy = &self.request.retry_strategy;
+        if strategy.is_none() {
+            return;
+        }
+        let strategy = strategy.as_ref().unwrap();
+        match strategy {
+            RetryStrategy::RetryImmediately { .. } => {
+                return;
+            }
+            RetryStrategy::RetryFixed { delay, .. } => {
+                tokio::time::sleep(delay.clone()).await;
+            }
+            RetryStrategy::RetryExponentialBackoff {
+                initial,
+                base,
+                max_delay,
+                ..
+            } => {
+                let delay = {
+                    let lock = self.retry_count.lock();
+                    min(
+                        initial.clone() * base.powi(*lock as i32) as u32,
+                        max_delay.clone(),
+                    )
+                };
+                let mut rng = rand::make_rng::<SmallRng>();
+                let jitter = rng.random_range(-0.25..0.25);
+                let delay = delay.mul_f64(jitter);
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
+    pub async fn start(&self) {
+        loop {
+            let result = self.inner.submit(&self.request, &self.tracker).await;
+            if result.is_ok() {
+                return;
+            }
+
+            let should_retry = self.should_retry();
+            if !should_retry {
+                return;
+            }
+            self.sleep().await;
+        }
     }
 }
