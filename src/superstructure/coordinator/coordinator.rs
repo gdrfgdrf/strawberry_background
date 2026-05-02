@@ -4,7 +4,8 @@ use crate::domain::models::coordinator_models::{
     RunnerStatus,
 };
 use crate::domain::traits::coordinator_traits::{
-    Categorizer, Coordinator, Queuer, Runner, RunnerDiscover, RunnerWatcher,
+    Categorizer, Coordinator, ProgressListener, ProgressListenerManager, Queuer, Runner,
+    RunnerDiscover, RunnerWatcher,
 };
 use crate::superstructure::coordinator::registry::RunnerRegistry;
 use crate::utils::blocking_heap::BlockingHeap;
@@ -38,10 +39,17 @@ pub struct DefaultQueuer {
     runner_discover: Arc<dyn RunnerDiscover>,
     categorizer: Arc<dyn Categorizer>,
     queue: BlockingHeap<Request>,
+    listener_manager: Arc<dyn ProgressListenerManager>,
 }
 
 pub struct DefaultRunnerWatcher {
     runner: Arc<dyn Runner>,
+    identifier: Identifier,
+    listener_manager: Arc<dyn ProgressListenerManager>,
+}
+
+pub struct DefaultProgressListenerManager {
+    listeners: DashMap<Identifier, Arc<dyn ProgressListener>>,
 }
 
 impl DefaultCoordinator {
@@ -269,12 +277,8 @@ impl RunnerDiscover for DefaultRunnerDiscover {
         timeout: Duration,
     ) -> Result<Identifier, DiscoverError> {
         let mut waiter = match category.is_empty() {
-            true => {
-                self.category_notification_channels.get("omnipotence")
-            }
-            false => {
-                self.category_notification_channels.get(category)
-            }
+            true => self.category_notification_channels.get("omnipotence"),
+            false => self.category_notification_channels.get(category),
         };
         if waiter.is_none() {
             waiter = self.category_notification_channels.get("omnipotence");
@@ -333,6 +337,7 @@ impl DefaultQueuer {
             runner_discover,
             categorizer,
             queue: BlockingHeap::with_capacity(max_request_count),
+            listener_manager: Arc::new(DefaultProgressListenerManager::new()),
         }
     }
 }
@@ -364,8 +369,16 @@ impl Queuer for DefaultQueuer {
 
         let registry = RunnerRegistry::singleton().read();
         let runner = registry.find_runner_by_identifier(&runner_identifier)?;
-        let watcher = Arc::new(DefaultRunnerWatcher::new(runner.clone()));
-        runner.submit(request, watcher);
+
+        let watcher = Arc::new(DefaultRunnerWatcher::new(
+            runner.clone(),
+            request.identifier.clone(),
+            self.listener_manager.clone(),
+        ));
+        let result = runner.submit(request, watcher);
+        if result.is_err() {
+            return Err(QueuerError::ErrorForward(result.err().unwrap().to_string()));
+        }
 
         Ok(())
     }
@@ -404,13 +417,41 @@ impl Queuer for DefaultQueuer {
 }
 
 impl DefaultRunnerWatcher {
-    pub fn new(runner: Arc<dyn Runner>) -> Self {
-        Self { runner }
+    pub fn new(
+        runner: Arc<dyn Runner>,
+        identifier: Identifier,
+        listener_manager: Arc<dyn ProgressListenerManager>,
+    ) -> Self {
+        Self {
+            runner,
+            identifier,
+            listener_manager,
+        }
+    }
+
+    fn notify_progress(&self, value: u64, total: Option<u64>) {
+        self.listener_manager
+            .notify_progress(&self.identifier, value, total);
+    }
+
+    fn notify_success(&self) {
+        self.listener_manager.notify_success(&self.identifier);
+    }
+
+    fn notify_fail(&self, err: &RunnerError) {
+        self.listener_manager.notify_fail(&self.identifier, err);
     }
 }
 
 impl RunnerWatcher for DefaultRunnerWatcher {
-    fn on_result(&self, bytes: Bytes) {
+    fn on_result(&self, bytes: Option<Bytes>) {
+        self.notify_success();
+
+        if bytes.is_none() {
+            return;
+        }
+        let bytes = bytes.unwrap();
+
         let empty_vec = Vec::<String>::new();
         let registry = RunnerRegistry::singleton().read();
 
@@ -437,6 +478,8 @@ impl RunnerWatcher for DefaultRunnerWatcher {
     }
 
     fn on_error(&self, err: RunnerError) {
+        self.notify_fail(&err);
+
         let empty_vec = Vec::<String>::new();
         let registry = RunnerRegistry::singleton().read();
 
@@ -460,5 +503,45 @@ impl RunnerWatcher for DefaultRunnerWatcher {
         post_runners
             .iter()
             .for_each(|post_runner| post_runner.post_err(err.clone()));
+    }
+
+    fn on_progress(&self, value: u64, total: Option<u64>) {
+        self.notify_progress(value, total);
+    }
+}
+
+impl DefaultProgressListenerManager {
+    pub fn new() -> Self {
+        Self {
+            listeners: DashMap::new(),
+        }
+    }
+}
+
+impl ProgressListenerManager for DefaultProgressListenerManager {
+    fn add_listener(&self, identifier: Identifier, listener: Arc<dyn ProgressListener>) {
+        self.listeners.insert(identifier, listener);
+    }
+
+    fn remove_listener(&self, identifier: &Identifier) {
+        self.listeners.remove(identifier);
+    }
+
+    fn notify_success(&self, identifier: &Identifier) {
+        self.listeners.iter().for_each(|listener| {
+            listener.on_success(identifier);
+        });
+    }
+
+    fn notify_fail(&self, identifier: &Identifier, err: &RunnerError) {
+        self.listeners.iter().for_each(|listener| {
+            listener.on_fail(identifier, err);
+        });
+    }
+
+    fn notify_progress(&self, identifier: &Identifier, value: u64, total: Option<u64>) {
+        self.listeners.iter().for_each(|listener| {
+            listener.on_progress(identifier, value, total);
+        });
     }
 }

@@ -1,7 +1,11 @@
-use crate::domain::models::coordinator_models::{CategorizerError, CoordinatorError, CycleSnapshot, DiscoverError, Identifier, PostRunnerConfiguration, QueuerError, Request, RunnerConfiguration, RunnerError, RunnerSnapshot};
+use crate::domain::models::coordinator_models::{
+    CategorizerError, CoordinatorError, CycleSnapshot, DiscoverError, Identifier,
+    PostRunnerConfiguration, QueuerError, Request, RunnerConfiguration, RunnerError,
+    RunnerSnapshot,
+};
+use bytes::Bytes;
 use std::sync::Arc;
 use std::time::Duration;
-use bytes::Bytes;
 
 pub trait Coordinator {
     fn cycle_once(&self) -> Result<Arc<CycleSnapshot>, CoordinatorError>;
@@ -17,7 +21,7 @@ pub trait Runner: Send + Sync + 'static {
     fn identifier(&self) -> &Identifier;
     fn configuration(&self) -> &RunnerConfiguration;
     fn cycle_once(&self) -> Result<RunnerSnapshot, RunnerError>;
-    fn submit(&self, request: Request, watcher: Arc<dyn RunnerWatcher>);
+    fn submit(&self, request: Request, watcher: Arc<dyn RunnerWatcher>) -> Result<(), RunnerError>;
 }
 
 pub trait PostRunner: Send + Sync + 'static {
@@ -41,6 +45,22 @@ pub trait Categorizer: Send + Sync + 'static {
 }
 
 pub trait RunnerWatcher: Send + Sync + 'static {
-    fn on_result(&self, bytes: Bytes);
+    fn on_result(&self, bytes: Option<Bytes>);
     fn on_error(&self, err: RunnerError);
+    fn on_progress(&self, value: u64, total: Option<u64>);
+}
+
+pub trait ProgressListenerManager: Send + Sync + 'static {
+    fn add_listener(&self, identifier: Identifier, listener: Arc<dyn ProgressListener>);
+    fn remove_listener(&self, identifier: &Identifier);
+
+    fn notify_success(&self, identifier: &Identifier);
+    fn notify_fail(&self, identifier: &Identifier, err: &RunnerError);
+    fn notify_progress(&self, request: &Identifier, value: u64, total: Option<u64>);
+}
+
+pub trait ProgressListener: Send + Sync {
+    fn on_progress(&self, identifier: &Identifier, value: u64, total: Option<u64>);
+    fn on_success(&self, identifier: &Identifier);
+    fn on_fail(&self, identifier: &Identifier, err: &RunnerError);
 }

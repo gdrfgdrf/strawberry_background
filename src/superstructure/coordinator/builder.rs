@@ -1,10 +1,14 @@
 use crate::domain::models::coordinator_models::{
     CoordinatorConfiguration, Identifier, Priority, QueueConfiguration, RejectStrategy, Request,
-    RetryStrategy,
+    RetryStrategy, RunnerConfiguration,
 };
+use crate::superstructure::coordinator::base::{BaseRunner, SimpleRunner};
+use bytes::Bytes;
 use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 use strawberry_macros::builder;
+use tokio::runtime::Runtime;
 
 #[builder]
 pub struct CoordinatorConfigurationBuilder {
@@ -23,12 +27,28 @@ pub struct QueueConfigurationBuilder {
 }
 
 #[builder]
+pub struct RunnerConfigurationBuilder {
+    pub identifier: Identifier,
+    pub accepted_categories: Mutex<Option<Vec<String>>>,
+}
+
+#[builder]
 pub struct RequestBuilder {
     pub identifier: Identifier,
     pub priority: Mutex<Option<Priority>>,
     pub retry_strategy: Mutex<Option<RetryStrategy>>,
     pub post_retry_strategy: Mutex<Option<RetryStrategy>>,
     pub timeout: Mutex<Option<Duration>>,
+    pub bytes: Mutex<Option<Bytes>>,
+}
+
+#[builder]
+pub struct BaseRunnerBuilder {
+    pub tokio_runtime: Arc<Runtime>,
+    pub identifier: Identifier,
+    pub configuration_builder: RunnerConfigurationBuilder,
+    pub inner: Arc<dyn SimpleRunner>,
+    pub max_concurrency_count: Mutex<Option<usize>>,
 }
 
 impl CoordinatorConfigurationBuilder {
@@ -55,6 +75,15 @@ impl QueueConfigurationBuilder {
     }
 }
 
+impl RunnerConfigurationBuilder {
+    pub fn build(self) -> RunnerConfiguration {
+        RunnerConfiguration {
+            accepted_categories: self.take_accepted_categories(),
+            identifier: self.identifier,
+        }
+    }
+}
+
 impl RequestBuilder {
     pub fn build(self) -> Request {
         Request {
@@ -62,8 +91,26 @@ impl RequestBuilder {
             retry_strategy: self.take_retry_strategy(),
             post_retry_strategy: self.take_post_retry_strategy(),
             timeout: self.take_timeout(),
+            bytes: self.take_bytes(),
             identifier: self.identifier,
         }
+    }
+}
+
+impl BaseRunnerBuilder {
+    pub fn build(self) -> BaseRunner {
+        let max_concurrency_count = self.take_max_concurrency_count().unwrap_or(1);
+        let tokio_runtime = self.tokio_runtime;
+        let identifier = self.identifier;
+        let configuration = self.configuration_builder.build();
+        let inner = self.inner;
+        BaseRunner::new(
+            tokio_runtime,
+            identifier,
+            configuration,
+            inner,
+            max_concurrency_count,
+        )
     }
 }
 
@@ -75,6 +122,12 @@ impl Into<CoordinatorConfiguration> for CoordinatorConfigurationBuilder {
 
 impl Into<QueueConfiguration> for QueueConfigurationBuilder {
     fn into(self) -> QueueConfiguration {
+        self.build()
+    }
+}
+
+impl Into<RunnerConfiguration> for RunnerConfigurationBuilder {
+    fn into(self) -> RunnerConfiguration {
         self.build()
     }
 }

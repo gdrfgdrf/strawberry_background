@@ -4,6 +4,7 @@
       <w>cycler</w>
       <w>reqwest</w>
       <w>rkyv</w>
+      <w>unconcurrently</w>
     </words>
   </dictionary>
 </component>

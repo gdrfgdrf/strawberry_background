@@ -1,15 +1,9 @@
 use proc_macro::TokenStream;
-use quote::__private::Span;
-use quote::quote;
-use syn::parse::{Parse, ParseStream};
-use syn::punctuated::Punctuated;
-use syn::{
-    GenericArgument, Ident, ItemStruct, LitStr, PathArguments, Token, Type, TypePath,
-    parse_macro_input,
-};
+use quote::{format_ident, quote};
+use syn::{GenericArgument, ItemStruct, PathArguments, Type, TypePath, parse_macro_input};
 
 fn strip_single_wrapper<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
-    if let Type::Path(TypePath { qself: None, path }) = ty {
+    if let Type::Path(TypePath { qself: _none, path }) = ty {
         if let Some(last_segment) = path.segments.last() {
             if last_segment.ident == wrapper {
                 if let PathArguments::AngleBracketed(ref args) = last_segment.arguments {
@@ -29,24 +23,14 @@ fn is_wrapper(ty: &Type, wrapper: &str) -> bool {
     strip_single_wrapper(ty, wrapper).is_some()
 }
 
-struct StringArgs {
-    strings: Punctuated<LitStr, Token![,]>,
-}
-
-impl Parse for StringArgs {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let strings = Punctuated::parse_terminated(input)?;
-        Ok(StringArgs { strings })
-    }
-}
-
 #[proc_macro_attribute]
 pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
     let a_struct = parse_macro_input!(item as ItemStruct);
     let struct_ident = &a_struct.ident;
 
-    let mut required_constructor_tokens = Vec::new();
+    let mut required_constructor_parameter_tokens = Vec::new();
     let mut constructor_tokens = Vec::new();
+
     let mut type_tokens = Vec::new();
     let fields = &a_struct.fields;
     fields.iter().for_each(|field| {
@@ -55,7 +39,6 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
             return;
         }
         let ident = ident.as_ref().unwrap();
-        let name = quote!(#ident).to_string();
 
         let mut ty = &field.ty;
         let is_mutex = is_wrapper(ty, "Mutex");
@@ -64,54 +47,142 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
         }
         let is_option = is_wrapper(ty, "Option");
         if is_option {
-            let inner = strip_single_wrapper(ty, "Option").unwrap();
-            let type_ident = Ident::new(quote!(#inner).to_string().as_str(), Span::mixed_site());
-            let set_function_ident =
-                Ident::new(format!("set_{}", name).as_str(), Span::mixed_site());
-            let take_function_ident =
-                Ident::new(format!("take_{}", name).as_str(), Span::mixed_site());
+            let ty = strip_single_wrapper(ty, "Option").unwrap();
+            let set_function_ident = format_ident!("set_{}", ident);
+            let take_function_ident = format_ident!("take_{}", ident);
 
+            let is_vec = is_wrapper(ty, "Vec");
             if is_mutex {
+                if is_vec {
+                    let ty = strip_single_wrapper(ty, "Vec").unwrap();
+                    let push_function_ident = format_ident!("push_{}", ident);
+                    let clear_function_ident = format_ident!("clear_{}", ident);
+
+                    type_tokens.push(quote! {
+                        pub fn #push_function_ident(&self, item: #ty) -> &#struct_ident {
+                            let mut lock = self.#ident.lock();
+                            if lock.is_none() {
+                                *lock = Some(Vec::new());
+                            }
+                            let lock = lock.as_mut().unwrap();
+                            lock.push(item);
+                            self
+                        }
+
+                        pub fn #clear_function_ident(&self) -> &#struct_ident {
+                            let mut lock = self.#ident.lock();
+                            if lock.is_none() {
+                                return self;
+                            }
+                            let lock = lock.as_mut().unwrap();
+                            lock.clear();
+                            self
+                        }
+                    });
+                }
+
                 type_tokens.push(quote! {
-                    pub fn #set_function_ident(&self, #ident: #type_ident) -> &#struct_ident {
+                    pub fn #set_function_ident(&self, #ident: #ty) -> &#struct_ident {
                         let mut lock = self.#ident.lock();
                         *lock = Some(#ident);
                         self
                     }
 
-                    pub fn #take_function_ident(&self) -> Option<#inner> {
+                    pub fn #take_function_ident(&self) -> Option<#ty> {
                         let mut lock = self.#ident.lock();
                         let data = lock.take();
                         data
                     }
                 });
+                if is_vec {
+                    constructor_tokens.push(quote! {
+                        #ident: Mutex::new(Some(Vec::new())),
+                    });
+                    return;
+                }
                 constructor_tokens.push(quote! {
                     #ident: Mutex::new(None),
                 });
             } else {
+                if is_vec {
+                    let ty = strip_single_wrapper(ty, "Vec").unwrap();
+                    let push_function_ident = format_ident!("push_{}", ident);
+                    let clear_function_ident = format_ident!("clear_{}", ident);
+
+                    type_tokens.push(quote! {
+                        pub fn #push_function_ident(&mut self, item: #ty) -> &#struct_ident {
+                            let vec = self.#ident.as_ref();
+                            if vec.is_none() {
+                                self.#ident = Some(Vec::new());
+                            }
+                            let vec = self.#ident.as_mut().unwrap();
+                            vec.push(item);
+                            self
+                        }
+
+                        pub fn #clear_function_ident(&mut self) -> &#struct_ident {
+                            let vec = self.#ident.as_ref();
+                            if vec.is_none() {
+                                self.#ident = Some(Vec::new());
+                            }
+                            let vec = self.#ident.as_mut().unwrap();
+                            vec.clear();
+                            self
+                        }
+                    });
+                }
+
                 type_tokens.push(quote! {
-                    pub fn #set_function_ident(&mut self, #ident: #type_ident) -> &#struct_ident {
+                    pub fn #set_function_ident(&mut self, #ident: #ty) -> &#struct_ident {
                         self.#ident = Some(#ident);
                         self
                     }
 
-                    pub fn #take_function_ident(&mut self) -> Option<#inner> {
+                    pub fn #take_function_ident(&mut self) -> Option<#ty> {
                         let data = self.#ident.take();
                         data
                     }
                 });
+                if is_vec {
+                    constructor_tokens.push(quote! {
+                        #ident: Some(Vec::new()),
+                    });
+                    return;
+                }
                 constructor_tokens.push(quote! {
                     #ident: None,
                 });
             }
         } else {
-            let type_ident = Ident::new(quote!(#ty).to_string().as_str(), Span::mixed_site());
+            let is_vec = is_wrapper(ty, "Vec");
+            if !is_vec {
+                constructor_tokens.push(quote! {
+                    #ident: #ident,
+                });
+                required_constructor_parameter_tokens.push(quote! {
+                    #ident: #ty,
+                });
+                return;
+            }
             constructor_tokens.push(quote! {
-                #ident: #ident,
+                #ident: Vec::new(),
             });
-            required_constructor_tokens.push(quote! {
-                #ident: #type_ident,
-            })
+
+            let ty = strip_single_wrapper(ty, "Vec").unwrap();
+            let push_function_ident = format_ident!("push_{}", ident);
+            let clear_function_ident = format_ident!("clear_{}", ident);
+
+            type_tokens.push(quote! {
+                pub fn #push_function_ident(&mut self, item: #ty) -> &#struct_ident {
+                    self.#ident.push(item);
+                    self
+                }
+
+                pub fn #clear_function_ident(&mut self) -> &#struct_ident {
+                    self.#ident.clear();
+                    self
+                }
+            });
         }
     });
 
@@ -120,7 +191,7 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
         #a_struct
 
         impl #impl_generics #struct_ident #ty_generics #where_clause {
-            pub fn new(#(#required_constructor_tokens)*) -> Self {
+            pub fn new(#(#required_constructor_parameter_tokens)*) -> Self {
                 Self {
                     #(#constructor_tokens)*
                 }

@@ -433,6 +433,7 @@ mod tests {
             retry_strategy: None,
             post_retry_strategy: None,
             timeout: None,
+            bytes: None
         };
         coordinator.put(request).unwrap();
 
@@ -445,6 +446,7 @@ mod tests {
             retry_strategy: None,
             post_retry_strategy: None,
             timeout: None,
+            bytes: None
         };
         coordinator.put(request).unwrap();
 
@@ -457,6 +459,7 @@ mod tests {
             retry_strategy: None,
             post_retry_strategy: None,
             timeout: None,
+            bytes: None
         };
         coordinator.put(request).unwrap();
 
@@ -516,18 +519,18 @@ mod tests {
 
             Ok(RunnerSnapshot {
                 identifier: self.identifier.clone(),
-                retry_count: None,
-                progress: None,
                 status,
             })
         }
 
-        fn submit(&self, request: Request, watcher: Arc<dyn RunnerWatcher>) {
+        fn submit(&self, request: Request, watcher: Arc<dyn RunnerWatcher>) -> Result<(), RunnerError> {
             println!(
                 "Runner {}: working on {}",
                 self.identifier, request.identifier
             );
-            *self.status.lock() = RunnerStatus::Busy
+            *self.status.lock() = RunnerStatus::Busy;
+
+            Ok(())
         }
     }
 }

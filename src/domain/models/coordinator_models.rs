@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
+use bytes::Bytes;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoordinatorError {
@@ -57,12 +58,14 @@ pub enum CategorizerError {
     ErrorForward(String),
 }
 
+#[derive(Clone)]
 pub enum Priority {
     Top { order: Option<usize> },
     Normal { order: Option<usize> },
     Bottom { order: Option<usize> },
 }
 
+#[derive(Clone)]
 pub enum RetryStrategy {
     RetryImmediately {
         max_retry: Option<usize>,
@@ -102,12 +105,14 @@ pub struct Progress {
     pub total: u64,
 }
 
+#[derive(Clone)]
 pub struct Request {
     pub identifier: Identifier,
     pub priority: Option<Priority>,
     pub retry_strategy: Option<RetryStrategy>,
     pub post_retry_strategy: Option<RetryStrategy>,
     pub timeout: Option<Duration>,
+    pub bytes: Option<Bytes>
 }
 
 pub struct CycleSnapshot {
@@ -116,8 +121,6 @@ pub struct CycleSnapshot {
 
 pub struct RunnerSnapshot {
     pub identifier: Identifier,
-    pub retry_count: Option<usize>,
-    pub progress: Option<Progress>,
     pub status: RunnerStatus,
 }
 
