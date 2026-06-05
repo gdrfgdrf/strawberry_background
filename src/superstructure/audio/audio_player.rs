@@ -3,36 +3,78 @@ use crate::domain::traits::audio_traits::AudioEngine;
 use crate::utils::streaming_reader::StreamingReader;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rodio::cpal::traits::HostTrait;
 use rodio::{Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, cpal};
+use rodio_tap::{ChannelSpectrum, TapReader, Transform, Visualizer, VisualizerConfig};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::sync;
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tokio_util::sync::CancellationToken;
 
+pub struct FftChannelData {
+    pub datas: Vec<f32>,
+}
+
+pub struct FftData {
+    pub sample_rate: u32,
+    pub channel_datas: Vec<FftChannelData>,
+}
+
 pub struct RodioEngine {
+    tokio_runtime: Arc<Runtime>,
     handle: RwLock<Option<MixerDeviceSink>>,
     player: RwLock<Option<Arc<Player>>>,
     error_sender: Arc<sync::broadcast::Sender<AudioError>>,
     position_sender: Arc<sync::watch::Sender<Duration>>,
     status_sender: Arc<sync::watch::Sender<AudioEngineStatus>>,
+    fft_sender: Arc<sync::watch::Sender<FftData>>,
+    fft_thread_handle: Mutex<Option<JoinHandle<()>>>,
     cancellation_token: CancellationToken,
 }
 
 impl RodioEngine {
-    pub fn new() -> Self {
+    pub fn new(tokio_runtime: Arc<Runtime>) -> Self {
         RodioEngine {
+            tokio_runtime,
             handle: RwLock::new(None),
             player: RwLock::new(None),
             error_sender: Arc::new(sync::broadcast::channel(256).0),
             position_sender: Arc::new(sync::watch::channel(Duration::ZERO).0),
             status_sender: Arc::new(sync::watch::channel(AudioEngineStatus::Default).0),
+            fft_sender: Arc::new(sync::watch::channel(FftData::empty()).0),
+            fft_thread_handle: Mutex::new(None),
             cancellation_token: CancellationToken::new(),
         }
+    }
+
+    fn start_fft(&self, reader: Arc<TapReader>) {
+        let mut handle = self.fft_thread_handle.lock();
+        if let Some(handle) = handle.take() {
+            handle.abort();
+        }
+
+        let cloned_sender = self.fft_sender.clone();
+        *handle = Some(self.tokio_runtime.spawn(async move {
+            let config = VisualizerConfig {
+                period: Duration::from_millis(10),
+                transform: Transform::FourierLog(28),
+                ..Default::default()
+            };
+            Visualizer::<2>::run_with_frame_reader(
+                move || Some(Arc::clone(&reader)),
+                config,
+                move |channels, sample_rate_hz| {
+                    let fft_data = FftData::new(channels, sample_rate_hz);
+                    let _ = cloned_sender.send(fft_data);
+                },
+            );
+        }));
     }
 }
 
@@ -154,8 +196,10 @@ impl AudioEngine for RodioEngine {
             Some(player) => {
                 player.clear();
                 let source = Decoder::try_from(cursor)?;
-                player.append(source);
+                let (reader, adapter) = TapReader::<2>::new(source);
+                player.append(adapter);
                 player.play();
+                self.start_fft(reader);
                 Ok(())
             }
         }
@@ -167,8 +211,10 @@ impl AudioEngine for RodioEngine {
             Some(player) => {
                 player.clear();
                 let source = Decoder::new(streaming_reader)?;
-                player.append(source);
+                let (reader, adapter) = TapReader::<2>::new(source);
+                player.append(adapter);
                 player.play();
+                self.start_fft(reader);
                 Ok(())
             }
         }
@@ -185,6 +231,33 @@ impl AudioEngine for RodioEngine {
     }
 }
 
+impl FftData {
+    fn new(channels: &[ChannelSpectrum], sample_rate: u32) -> Self {
+        let mut channel_datas = Vec::<FftChannelData>::new();
+        channels.iter().for_each(|channel| {
+            let mut channel_data = Vec::<f32>::new();
+            for (_, magnitude) in channel.bins.iter().copied().take(5).enumerate() {
+                channel_data.push(magnitude);
+            }
+            channel_datas.push(FftChannelData {
+                datas: channel_data,
+            });
+        });
+
+        FftData {
+            sample_rate,
+            channel_datas,
+        }
+    }
+
+    fn empty() -> Self {
+        FftData {
+            sample_rate: 0,
+            channel_datas: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::domain::traits::audio_traits::AudioEngine;
@@ -197,10 +270,12 @@ mod tests {
     use std::thread;
     use std::thread::sleep;
     use std::time::Duration;
+    use tokio::runtime::Runtime;
 
     #[test]
     fn test_audio_player() {
-        let engine = RodioEngine::new();
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let engine = RodioEngine::new(runtime);
         engine.init().unwrap();
 
         let shared_buffer = Arc::new(SharedBuffer {
@@ -210,7 +285,7 @@ mod tests {
         });
         let cloned_shared_buffer = shared_buffer.clone();
         thread::spawn(move || {
-            let url = "https://samplelib.com/mp3/sample-speech-30m.mp3";
+            let url = "https://samplelib.com/mp3/sample-10s.mp3";
             let client = reqwest::blocking::Client::new();
             let mut response = match client.get(url).send() {
                 Ok(r) => r,
@@ -249,6 +324,6 @@ mod tests {
         reader.wait_for_data(8192).unwrap();
         engine.play_stream(reader).unwrap();
 
-        sleep(Duration::from_secs(60 * 8))
+        sleep(Duration::from_secs(15))
     }
 }
