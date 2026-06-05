@@ -23,4 +23,6 @@ pub trait AudioEngine {
     
     fn play_cursor(&self, cursor: Cursor<Bytes>) -> Result<(), AudioError>;
     fn play_stream(&self, streaming_reader: StreamingReader) -> Result<(), AudioError>;
+    
+    fn reset(&self) -> Result<(), AudioError>;
 }

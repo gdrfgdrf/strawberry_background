@@ -166,6 +166,16 @@ impl AudioEngine for RodioEngine {
             }
         }
     }
+
+    fn reset(&self) -> Result<(), AudioError> {
+        match self.player.read().as_ref() {
+            None => Err(AudioError::NotInitialized),
+            Some(player) => {
+                player.clear();
+                Ok(())
+            }
+        }
+    }
 }
 
 #[cfg(test)]
