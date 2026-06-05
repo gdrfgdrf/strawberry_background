@@ -12,5 +12,6 @@ pub enum AudioError {
 pub enum AudioEngineStatus {
     Default,
     Paused,
+    Finished,
     Playing,
 }
