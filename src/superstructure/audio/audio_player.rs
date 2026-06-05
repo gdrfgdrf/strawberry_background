@@ -17,10 +17,12 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tokio_util::sync::CancellationToken;
 
+#[derive(Clone)]
 pub struct FftChannelData {
     pub datas: Vec<f32>,
 }
 
+#[derive(Clone)]
 pub struct FftData {
     pub sample_rate: u32,
     pub channel_datas: Vec<FftChannelData>,
@@ -51,6 +53,11 @@ impl RodioEngine {
             fft_thread_handle: Mutex::new(None),
             cancellation_token: CancellationToken::new(),
         }
+    }
+
+    pub fn fft_stream(&self) -> Result<impl Stream<Item = FftData>, AudioError> {
+        let receiver = self.fft_sender.subscribe();
+        Ok(WatchStream::new(receiver))
     }
 
     fn start_fft(&self, reader: Arc<TapReader>) {
