@@ -81,7 +81,7 @@ impl AudioEngine for RodioEngine {
                 let position = player.get_pos();
                 let _ = position_sender.send(position);
 
-                if player.is_paused() {
+                if player.is_paused() || player.empty() {
                     let _ = status_sender.send(AudioEngineStatus::Paused);
                 } else {
                     let _ = status_sender.send(AudioEngineStatus::Playing);
