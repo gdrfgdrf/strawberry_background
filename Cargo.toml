@@ -37,6 +37,9 @@ parking_lot = "0.12.5"
 strawberry_macros = { path = "strawberry_macros" }
 seqlock = "0.2.0"
 rand = "0.10.1"
+rodio = "0.22.2"
+futures = "0.3.32"
+tokio-stream = { version = "0.1.18", features = ["sync"] }
 
 [dev-dependencies]
 tokio-test = "*"

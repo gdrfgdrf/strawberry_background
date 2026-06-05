@@ -1,4 +1,8 @@
 use std::sync::PoisonError;
+use rodio::decoder::DecoderError;
+use rodio::DeviceSinkError;
+use rodio::source::SeekError;
+use crate::domain::models::audio_models::AudioError;
 use crate::domain::models::coordinator_models::{CategorizerError, CoordinatorError, DiscoverError, QueuerError, RegistryError};
 use crate::domain::models::file_cache_models::CacheError;
 use crate::domain::models::storage_models::StorageError;
@@ -79,5 +83,23 @@ impl From<CategorizerError> for QueuerError {
 impl From<DiscoverError> for QueuerError {
     fn from(value: DiscoverError) -> Self {
         QueuerError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<DeviceSinkError> for AudioError {
+    fn from(value: DeviceSinkError) -> Self {
+        AudioError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<DecoderError> for AudioError {
+    fn from(value: DecoderError) -> Self {
+        AudioError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<SeekError> for AudioError {
+    fn from(value: SeekError) -> Self {
+        AudioError::ErrorForward(value.to_string())
     }
 }

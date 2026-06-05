@@ -1,9 +1,11 @@
 <component name="ProjectDictionaryState">
   <dictionary name="project">
     <words>
+      <w>cpal</w>
       <w>cycler</w>
       <w>reqwest</w>
       <w>rkyv</w>
+      <w>rodio</w>
       <w>unconcurrently</w>
     </words>
   </dictionary>

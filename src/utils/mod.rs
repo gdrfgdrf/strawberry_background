@@ -4,3 +4,4 @@ pub mod progress_reader;
 pub mod stream_with_callback;
 pub mod waiter;
 pub mod blocking_heap;
+pub mod streaming_reader;

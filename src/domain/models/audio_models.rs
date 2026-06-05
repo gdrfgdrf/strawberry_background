@@ -1,24 +1,16 @@
 
 
-
-pub struct RawAudioData<'a> {
-    pub channels: Vec<AudioChannelData<'a>>
-}
-
-pub struct AudioChannelData<'a> {
-    pub index: i32,
-    pub data: &'a Vec<u8>
-}
-
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum AudioError {
-    
+    #[error("Error Forward: {0}")]
+    ErrorForward(String),
+    #[error("Not initialized")]
+    NotInitialized
 }
 
+#[derive(Clone)]
 pub enum AudioEngineStatus {
-    Initializing,
-    Ready,
-    Playing,
+    Default,
     Paused,
-    Stopped,
+    Playing,
 }
