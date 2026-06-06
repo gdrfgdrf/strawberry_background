@@ -1,4 +1,3 @@
-use std::fs::{File, OpenOptions};
 use crate::domain::models::audio_models::{AudioEngineStatus, AudioError};
 use crate::domain::traits::audio_traits::AudioEngine;
 use crate::utils::streaming_reader::StreamingReader;
@@ -67,7 +66,6 @@ impl RodioEngine {
             handle.abort();
         }
 
-        // eprintln!("starting fft thread");
         let cloned_sender = self.fft_sender.clone();
         *handle = Some(self.tokio_runtime.spawn(async move {
             // let mut file = OpenOptions::new()
@@ -81,30 +79,44 @@ impl RodioEngine {
                 transform: Transform::FourierLog(28),
                 ..Default::default()
             };
-            Visualizer::<2>::run_with_frame_reader(
+            Visualizer::<2>::run_with_frame_reader_async(
                 move || Some(Arc::clone(&reader)),
                 config,
                 move |channels, sample_rate_hz| {
-                    // eprintln!("sending fft data");
-                    let fft_data = FftData::new(channels, sample_rate_hz);
-                    // let formatted = format!(
-                    //     "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}\n",
-                    //     fft_data.sample_rate,
-                    //     fft_data.channel_datas.first().unwrap().datas.first(),
-                    //     fft_data.channel_datas.first().unwrap().datas.get(1),
-                    //     fft_data.channel_datas.first().unwrap().datas.get(2),
-                    //     fft_data.channel_datas.first().unwrap().datas.get(3)
-                    // );
-                    // let _ = file.write(&*formatted.into_bytes());
-                    // let _ = file.sync_all();
+                    const MIN_DB: f32 = -100.0;
+                    const MAX_DB: f32 = 0.0;
+                    const EPSILON: f32 = 1e-8;
 
+                    let scaled_channels: Vec<ChannelSpectrum> = channels
+                        .iter()
+                        .map(|ch| {
+                            let scaled_bins: Vec<f32> = ch
+                                .bins
+                                .iter()
+                                .map(|&b| {
+                                    let db = 20.0 * (b + EPSILON).log10();
+                                    let norm = (db - MIN_DB) / (MAX_DB - MIN_DB);
+                                    norm.clamp(0.0, 1.0)
+                                })
+                                .collect();
+                            let peak_db = 20.0 * (ch.peak + EPSILON).log10();
+                            let rms_db = 20.0 * (ch.rms + EPSILON).log10();
+                            let norm_peak =
+                                ((peak_db - MIN_DB) / (MAX_DB - MIN_DB)).clamp(0.0, 1.0);
+                            let norm_rms = ((rms_db - MIN_DB) / (MAX_DB - MIN_DB)).clamp(0.0, 1.0);
+                            ChannelSpectrum {
+                                peak: norm_peak,
+                                rms: norm_rms,
+                                bins: scaled_bins,
+                            }
+                        })
+                        .collect();
+
+                    let fft_data = FftData::new(&scaled_channels, sample_rate_hz);
                     let _ = cloned_sender.send(fft_data);
-                    // let result = cloned_sender.send(fft_data);
-                    // if result.is_err() {
-                    //     eprintln!("send fft data error: {:?}", result);
-                    // }
                 },
-            );
+            )
+            .await;
         }));
     }
 }
@@ -291,18 +303,16 @@ impl FftData {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::OpenOptions;
     use crate::domain::traits::audio_traits::AudioEngine;
     use crate::superstructure::audio::audio_player::RodioEngine;
     use crate::utils::streaming_reader::{SharedBuffer, StreamingReader};
+    use futures_util::StreamExt;
     use parking_lot::Condvar;
     use parking_lot::lock_api::Mutex;
+    use std::fs::OpenOptions;
     use std::io::{Read, Write};
     use std::sync::Arc;
     use std::thread;
-    use std::thread::sleep;
-    use std::time::Duration;
-    use futures_util::StreamExt;
     use tokio::runtime::Runtime;
 
     macro_rules! await_test {
@@ -391,6 +401,6 @@ mod tests {
                 let _ = file.write(&*formatted.into_bytes());
                 let _ = file.sync_all();
             }
-        };
+        }
     }
 }
