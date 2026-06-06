@@ -1,3 +1,4 @@
+use std::fs::{File, OpenOptions};
 use crate::domain::models::audio_models::{AudioEngineStatus, AudioError};
 use crate::domain::traits::audio_traits::AudioEngine;
 use crate::utils::streaming_reader::StreamingReader;
@@ -7,7 +8,7 @@ use parking_lot::{Mutex, RwLock};
 use rodio::cpal::traits::HostTrait;
 use rodio::{Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, cpal};
 use rodio_tap::{ChannelSpectrum, TapReader, Transform, Visualizer, VisualizerConfig};
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -68,8 +69,14 @@ impl RodioEngine {
 
         let cloned_sender = self.fft_sender.clone();
         *handle = Some(self.tokio_runtime.spawn(async move {
+            // let mut file = OpenOptions::new()
+            //     .create(true)
+            //     .append(true)
+            //     .open("fft_visualiser.txt")
+            //     .unwrap();
+
             let config = VisualizerConfig {
-                period: Duration::from_millis(10),
+                period: Duration::from_millis(33),
                 transform: Transform::FourierLog(28),
                 ..Default::default()
             };
@@ -78,6 +85,17 @@ impl RodioEngine {
                 config,
                 move |channels, sample_rate_hz| {
                     let fft_data = FftData::new(channels, sample_rate_hz);
+                    // let formatted = format!(
+                    //     "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}\n",
+                    //     fft_data.sample_rate,
+                    //     fft_data.channel_datas.first().unwrap().datas.first(),
+                    //     fft_data.channel_datas.first().unwrap().datas.get(1),
+                    //     fft_data.channel_datas.first().unwrap().datas.get(2),
+                    //     fft_data.channel_datas.first().unwrap().datas.get(3)
+                    // );
+                    // let _ = file.write(&*formatted.into_bytes());
+                    // let _ = file.sync_all();
+
                     let _ = cloned_sender.send(fft_data);
                 },
             );
@@ -267,17 +285,25 @@ impl FftData {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
     use crate::domain::traits::audio_traits::AudioEngine;
     use crate::superstructure::audio::audio_player::RodioEngine;
     use crate::utils::streaming_reader::{SharedBuffer, StreamingReader};
     use parking_lot::Condvar;
     use parking_lot::lock_api::Mutex;
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::sync::Arc;
     use std::thread;
     use std::thread::sleep;
     use std::time::Duration;
+    use futures_util::StreamExt;
     use tokio::runtime::Runtime;
+
+    macro_rules! await_test {
+        ($e:expr) => {
+            tokio_test::block_on($e)
+        };
+    }
 
     #[test]
     fn test_audio_player() {
@@ -331,6 +357,34 @@ mod tests {
         reader.wait_for_data(8192).unwrap();
         engine.play_stream(reader).unwrap();
 
-        sleep(Duration::from_secs(15))
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("fft_visualiser.txt")
+            .unwrap();
+
+        while let Some(fft_data) = await_test!(engine.fft_stream().unwrap().next()) {
+            let channel0 = fft_data.channel_datas.first();
+            if let Some(channel0) = channel0 {
+                let formatted = format!(
+                    "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}",
+                    fft_data.sample_rate,
+                    channel0.datas.first(),
+                    channel0.datas.get(1),
+                    channel0.datas.get(2),
+                    channel0.datas.get(3)
+                );
+                let formatted = format!(
+                    "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}\n",
+                    fft_data.sample_rate,
+                    fft_data.channel_datas.first().unwrap().datas.first(),
+                    fft_data.channel_datas.first().unwrap().datas.get(1),
+                    fft_data.channel_datas.first().unwrap().datas.get(2),
+                    fft_data.channel_datas.first().unwrap().datas.get(3)
+                );
+                let _ = file.write(&*formatted.into_bytes());
+                let _ = file.sync_all();
+            }
+        };
     }
 }
