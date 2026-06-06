@@ -67,6 +67,7 @@ impl RodioEngine {
             handle.abort();
         }
 
+        eprintln!("starting fft thread");
         let cloned_sender = self.fft_sender.clone();
         *handle = Some(self.tokio_runtime.spawn(async move {
             // let mut file = OpenOptions::new()
@@ -84,6 +85,7 @@ impl RodioEngine {
                 move || Some(Arc::clone(&reader)),
                 config,
                 move |channels, sample_rate_hz| {
+                    eprintln!("sending fft data");
                     let fft_data = FftData::new(channels, sample_rate_hz);
                     // let formatted = format!(
                     //     "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}\n",
@@ -96,7 +98,10 @@ impl RodioEngine {
                     // let _ = file.write(&*formatted.into_bytes());
                     // let _ = file.sync_all();
 
-                    let _ = cloned_sender.send(fft_data);
+                    let result = cloned_sender.send(fft_data);
+                    if result.is_err() {
+                        eprintln!("send fft data error: {:?}", result);
+                    }
                 },
             );
         }));
