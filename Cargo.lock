@@ -1675,6 +1675,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "realfft"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f821338fddb99d089116342c46e9f1fbf3828dba077674613e734e01d6ea8677"
+dependencies = [
+ "rustfft",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2111,6 +2120,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "strawberry_background"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "async-trait",
  "bytecheck",
  "bytes",
@@ -2124,6 +2134,7 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "rand 0.10.1",
+ "realfft",
  "reqwest",
  "reqwest_cookie_store",
  "rkv",

@@ -1,13 +1,14 @@
 use crate::domain::models::audio_models::{AudioEngineStatus, AudioError};
 use crate::domain::traits::audio_traits::AudioEngine;
+use crate::utils::fft_visualiser::{run_custom_visualizer, FftData};
 use crate::utils::streaming_reader::StreamingReader;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use parking_lot::{Mutex, RwLock};
 use rodio::cpal::traits::HostTrait;
-use rodio::{Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, cpal};
-use rodio_tap::{ChannelSpectrum, TapReader, Transform, Visualizer, VisualizerConfig};
-use std::io::{Cursor, Write};
+use rodio::{cpal, Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, Source};
+use rodio_tap::TapReader;
+use std::io::Cursor;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -16,17 +17,6 @@ use tokio::sync;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tokio_util::sync::CancellationToken;
-
-#[derive(Clone)]
-pub struct FftChannelData {
-    pub datas: Vec<f32>,
-}
-
-#[derive(Clone)]
-pub struct FftData {
-    pub sample_rate: u32,
-    pub channel_datas: Vec<FftChannelData>,
-}
 
 pub struct RodioEngine {
     tokio_runtime: Arc<Runtime>,
@@ -60,63 +50,23 @@ impl RodioEngine {
         Ok(WatchStream::new(receiver))
     }
 
-    fn start_fft(&self, reader: Arc<TapReader>) {
+    fn start_fft(&self, sample_rate: u32, reader: Arc<TapReader>) {
         let mut handle = self.fft_thread_handle.lock();
         if let Some(handle) = handle.take() {
             handle.abort();
         }
 
         let cloned_sender = self.fft_sender.clone();
-        *handle = Some(self.tokio_runtime.spawn(async move {
-            // let mut file = OpenOptions::new()
-            //     .create(true)
-            //     .append(true)
-            //     .open("fft_visualiser.txt")
-            //     .unwrap();
-
-            let config = VisualizerConfig {
-                period: Duration::from_millis(33),
-                transform: Transform::FourierLog(28),
-                ..Default::default()
-            };
-            Visualizer::<2>::run_with_frame_reader_async(
-                move || Some(Arc::clone(&reader)),
-                config,
-                move |channels, sample_rate_hz| {
-                    const MIN_DB: f32 = -100.0;
-                    const MAX_DB: f32 = 0.0;
-                    const EPSILON: f32 = 1e-8;
-
-                    let scaled_channels: Vec<ChannelSpectrum> = channels
-                        .iter()
-                        .map(|ch| {
-                            let scaled_bins: Vec<f32> = ch
-                                .bins
-                                .iter()
-                                .map(|&b| {
-                                    let db = 20.0 * (b + EPSILON).log10();
-                                    let norm = (db - MIN_DB) / (MAX_DB - MIN_DB);
-                                    norm.clamp(0.0, 1.0)
-                                })
-                                .collect();
-                            let peak_db = 20.0 * (ch.peak + EPSILON).log10();
-                            let rms_db = 20.0 * (ch.rms + EPSILON).log10();
-                            let norm_peak =
-                                ((peak_db - MIN_DB) / (MAX_DB - MIN_DB)).clamp(0.0, 1.0);
-                            let norm_rms = ((rms_db - MIN_DB) / (MAX_DB - MIN_DB)).clamp(0.0, 1.0);
-                            ChannelSpectrum {
-                                peak: norm_peak,
-                                rms: norm_rms,
-                                bins: scaled_bins,
-                            }
-                        })
-                        .collect();
-
-                    let fft_data = FftData::new(&scaled_channels, sample_rate_hz);
-                    let _ = cloned_sender.send(fft_data);
-                },
-            )
-            .await;
+        *handle = Some(self.tokio_runtime.spawn_blocking(move || {
+            run_custom_visualizer(
+                reader,
+                4096,
+                5,
+                20.0,
+                (sample_rate as f32) / 2.0,
+                false,
+                cloned_sender,
+            );
         }));
     }
 }
@@ -239,10 +189,11 @@ impl AudioEngine for RodioEngine {
             Some(player) => {
                 player.clear();
                 let source = Decoder::try_from(cursor)?;
+                let sample_rate = source.sample_rate().get();
                 let (reader, adapter) = TapReader::<2>::new(source);
                 player.append(adapter);
                 player.play();
-                self.start_fft(reader);
+                self.start_fft(sample_rate, reader);
                 Ok(())
             }
         }
@@ -254,10 +205,11 @@ impl AudioEngine for RodioEngine {
             Some(player) => {
                 player.clear();
                 let source = Decoder::new(streaming_reader)?;
+                let sample_rate = source.sample_rate().get();
                 let (reader, adapter) = TapReader::<2>::new(source);
                 player.append(adapter);
                 player.play();
-                self.start_fft(reader);
+                self.start_fft(sample_rate, reader);
                 Ok(())
             }
         }
@@ -274,41 +226,14 @@ impl AudioEngine for RodioEngine {
     }
 }
 
-impl FftData {
-    fn new(channels: &[ChannelSpectrum], sample_rate: u32) -> Self {
-        let mut channel_datas = Vec::<FftChannelData>::new();
-        channels.iter().for_each(|channel| {
-            let mut channel_data = Vec::<f32>::new();
-            for (_, magnitude) in channel.bins.iter().copied().take(5).enumerate() {
-                channel_data.push(magnitude);
-            }
-            channel_datas.push(FftChannelData {
-                datas: channel_data,
-            });
-        });
-
-        FftData {
-            sample_rate,
-            channel_datas,
-        }
-    }
-
-    fn empty() -> Self {
-        FftData {
-            sample_rate: 0,
-            channel_datas: Vec::new(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::domain::traits::audio_traits::AudioEngine;
     use crate::superstructure::audio::audio_player::RodioEngine;
     use crate::utils::streaming_reader::{SharedBuffer, StreamingReader};
     use futures_util::StreamExt;
-    use parking_lot::Condvar;
     use parking_lot::lock_api::Mutex;
+    use parking_lot::Condvar;
     use std::fs::OpenOptions;
     use std::io::{Read, Write};
     use std::sync::Arc;
@@ -382,14 +307,6 @@ mod tests {
         while let Some(fft_data) = await_test!(engine.fft_stream().unwrap().next()) {
             let channel0 = fft_data.channel_datas.first();
             if let Some(channel0) = channel0 {
-                let formatted = format!(
-                    "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}",
-                    fft_data.sample_rate,
-                    channel0.datas.first(),
-                    channel0.datas.get(1),
-                    channel0.datas.get(2),
-                    channel0.datas.get(3)
-                );
                 let formatted = format!(
                     "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}\n",
                     fft_data.sample_rate,
