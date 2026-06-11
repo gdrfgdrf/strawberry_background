@@ -41,6 +41,11 @@ impl RodioEngine {
         }
     }
 
+    pub fn tap_reader_stream(&self) -> Result<impl Stream<Item = Option<Arc<TapReader>>>, AudioError> {
+        let receiver = self.tap_reader_sender.subscribe();
+        Ok(WatchStream::new(receiver))
+    }
+
     // pub fn fft_stream(&self) -> Result<impl Stream<Item = FftData>, AudioError> {
     //     let receiver = self.fft_sender.subscribe();
     //     Ok(WatchStream::new(receiver))
