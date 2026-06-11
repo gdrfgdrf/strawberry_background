@@ -6,3 +6,4 @@ pub mod waiter;
 pub mod blocking_heap;
 pub mod streaming_reader;
 pub mod fft_visualiser;
+pub mod fft_executor;

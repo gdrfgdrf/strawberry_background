@@ -19,56 +19,52 @@ use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tokio_util::sync::CancellationToken;
 
 pub struct RodioEngine {
-    tokio_runtime: Arc<Runtime>,
     handle: RwLock<Option<MixerDeviceSink>>,
     player: RwLock<Option<Arc<Player>>>,
     error_sender: Arc<sync::broadcast::Sender<AudioError>>,
     position_sender: Arc<sync::watch::Sender<Duration>>,
     status_sender: Arc<sync::watch::Sender<AudioEngineStatus>>,
-    fft_sender: Arc<sync::watch::Sender<FftData>>,
-    fft_thread_handle: Mutex<Option<JoinHandle<()>>>,
+    tap_reader_sender: Arc<sync::watch::Sender<Option<Arc<TapReader>>>>,
     cancellation_token: CancellationToken,
 }
 
 impl RodioEngine {
-    pub fn new(tokio_runtime: Arc<Runtime>) -> Self {
+    pub fn new() -> Self {
         RodioEngine {
-            tokio_runtime,
             handle: RwLock::new(None),
             player: RwLock::new(None),
             error_sender: Arc::new(sync::broadcast::channel(256).0),
             position_sender: Arc::new(sync::watch::channel(Duration::ZERO).0),
             status_sender: Arc::new(sync::watch::channel(AudioEngineStatus::Default).0),
-            fft_sender: Arc::new(sync::watch::channel(FftData::empty()).0),
-            fft_thread_handle: Mutex::new(None),
+            tap_reader_sender: Arc::new(sync::watch::channel(None).0),
             cancellation_token: CancellationToken::new(),
         }
     }
 
-    pub fn fft_stream(&self) -> Result<impl Stream<Item = FftData>, AudioError> {
-        let receiver = self.fft_sender.subscribe();
-        Ok(WatchStream::new(receiver))
-    }
-
-    fn start_fft(&self, sample_rate: u32, reader: Arc<TapReader>) {
-        let mut handle = self.fft_thread_handle.lock();
-        if let Some(handle) = handle.take() {
-            handle.abort();
-        }
-
-        let cloned_sender = self.fft_sender.clone();
-        *handle = Some(self.tokio_runtime.spawn_blocking(move || {
-            run_custom_visualizer(
-                reader,
-                4096,
-                5,
-                20.0,
-                (sample_rate as f32) / 2.0,
-                false,
-                cloned_sender,
-            );
-        }));
-    }
+    // pub fn fft_stream(&self) -> Result<impl Stream<Item = FftData>, AudioError> {
+    //     let receiver = self.fft_sender.subscribe();
+    //     Ok(WatchStream::new(receiver))
+    // }
+    //
+    // fn start_fft(&self, sample_rate: u32, reader: Arc<TapReader>) {
+    //     let mut handle = self.fft_thread_handle.lock();
+    //     if let Some(handle) = handle.take() {
+    //         handle.abort();
+    //     }
+    //
+    //     let cloned_sender = self.fft_sender.clone();
+    //     *handle = Some(self.tokio_runtime.spawn_blocking(move || {
+    //         run_custom_visualizer(
+    //             reader,
+    //             4096,
+    //             5,
+    //             20.0,
+    //             (sample_rate as f32) / 2.0,
+    //             false,
+    //             cloned_sender,
+    //         );
+    //     }));
+    // }
 }
 
 impl AudioEngine for RodioEngine {
@@ -193,7 +189,7 @@ impl AudioEngine for RodioEngine {
                 let (reader, adapter) = TapReader::<2>::new(source);
                 player.append(adapter);
                 player.play();
-                self.start_fft(sample_rate, reader);
+                let _ = self.tap_reader_sender.send(Some(reader));
                 Ok(())
             }
         }
@@ -209,7 +205,7 @@ impl AudioEngine for RodioEngine {
                 let (reader, adapter) = TapReader::<2>::new(source);
                 player.append(adapter);
                 player.play();
-                self.start_fft(sample_rate, reader);
+                let _ = self.tap_reader_sender.send(Some(reader));
                 Ok(())
             }
         }
@@ -249,7 +245,7 @@ mod tests {
     #[test]
     fn test_audio_player() {
         let runtime = Arc::new(Runtime::new().unwrap());
-        let engine = RodioEngine::new(runtime);
+        let engine = RodioEngine::new();
         engine.init().unwrap();
 
         let shared_buffer = Arc::new(SharedBuffer {
@@ -298,26 +294,26 @@ mod tests {
         reader.wait_for_data(8192).unwrap();
         engine.play_stream(reader).unwrap();
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("fft_visualiser.txt")
-            .unwrap();
-
-        while let Some(fft_data) = await_test!(engine.fft_stream().unwrap().next()) {
-            let channel0 = fft_data.channel_datas.first();
-            if let Some(channel0) = channel0 {
-                let formatted = format!(
-                    "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}\n",
-                    fft_data.sample_rate,
-                    fft_data.channel_datas.first().unwrap().datas.first(),
-                    fft_data.channel_datas.first().unwrap().datas.get(1),
-                    fft_data.channel_datas.first().unwrap().datas.get(2),
-                    fft_data.channel_datas.first().unwrap().datas.get(3)
-                );
-                let _ = file.write(&*formatted.into_bytes());
-                let _ = file.sync_all();
-            }
-        }
+        // let mut file = OpenOptions::new()
+        //     .create(true)
+        //     .append(true)
+        //     .open("fft_visualiser.txt")
+        //     .unwrap();
+        //
+        // while let Some(fft_data) = await_test!(engine.fft_stream().unwrap().next()) {
+        //     let channel0 = fft_data.channel_datas.first();
+        //     if let Some(channel0) = channel0 {
+        //         let formatted = format!(
+        //             "[{} Hz], channel 0: {:?}, {:?}, {:?}, {:?}\n",
+        //             fft_data.sample_rate,
+        //             fft_data.channel_datas.first().unwrap().datas.first(),
+        //             fft_data.channel_datas.first().unwrap().datas.get(1),
+        //             fft_data.channel_datas.first().unwrap().datas.get(2),
+        //             fft_data.channel_datas.first().unwrap().datas.get(3)
+        //         );
+        //         let _ = file.write(&*formatted.into_bytes());
+        //         let _ = file.sync_all();
+        //     }
+        // }
     }
 }
