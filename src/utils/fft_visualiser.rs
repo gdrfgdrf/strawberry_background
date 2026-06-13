@@ -211,8 +211,6 @@ pub fn run_custom_visualizer<const C: usize>(
     tap_reader: Arc<TapReader<C>>,
     fft_len: usize,
     num_bands: usize,
-    min_frequency_hz: f32,
-    max_frequency_hz: f32,
     normalize_by_fft_size: bool,
     sender: Arc<Sender<FftData>>,
 ) -> ! {
@@ -235,8 +233,8 @@ pub fn run_custom_visualizer<const C: usize>(
                 fft_len,
                 num_bands,
                 sample_rate,
-                min_frequency_hz,
-                max_frequency_hz,
+                20.0,
+                (sample_rate as f32) / 2.0,
                 normalize_by_fft_size,
             ));
             last_sample_rate = sample_rate;
