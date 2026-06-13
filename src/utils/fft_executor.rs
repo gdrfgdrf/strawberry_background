@@ -68,9 +68,6 @@ impl FftExecutor {
 
 impl Drop for FftExecutor {
     fn drop(&mut self) {
-        let mut handle = self.fft_thread_handle.lock();
-        if let Some(handle) = handle.take() {
-            handle.abort();
-        }
+        self.abort()
     }
 }
