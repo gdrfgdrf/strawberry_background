@@ -7,6 +7,7 @@ pub struct SharedBuffer {
     pub data: Mutex<Vec<u8>>,
     pub eof: Mutex<bool>,
     pub condvar: Condvar,
+    pub length: Mutex<Option<u64>>
 }
 
 pub struct StreamingReader {
@@ -25,6 +26,11 @@ impl StreamingReader {
 
     pub fn is_eof(&self) -> bool {
         *self.shared.eof.lock()
+    }
+    
+    pub fn length(&self) -> Option<u64> {
+        let length = self.shared.length.lock();
+        length.clone()
     }
 
     pub fn position(&self) -> usize {

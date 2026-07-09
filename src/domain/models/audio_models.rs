@@ -5,7 +5,9 @@ pub enum AudioError {
     #[error("Error Forward: {0}")]
     ErrorForward(String),
     #[error("Not initialized")]
-    NotInitialized
+    NotInitialized,
+    #[error("Length is required")]
+    LengthRequired
 }
 
 #[derive(Clone)]

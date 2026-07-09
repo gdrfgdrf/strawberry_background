@@ -1,12 +1,12 @@
 use crate::domain::models::audio_models::{AudioEngineStatus, AudioError};
 use crate::domain::traits::audio_traits::AudioEngine;
-use crate::utils::fft_visualiser::{run_custom_visualizer, FftData};
+use crate::utils::fft_visualiser::{FftData, run_custom_visualizer};
 use crate::utils::streaming_reader::StreamingReader;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use parking_lot::{Mutex, RwLock};
 use rodio::cpal::traits::HostTrait;
-use rodio::{cpal, Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, Source};
+use rodio::{Decoder, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, Source, cpal};
 use rodio_tap::TapReader;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -41,35 +41,12 @@ impl RodioEngine {
         }
     }
 
-    pub fn tap_reader_stream(&self) -> Result<impl Stream<Item = Option<Arc<TapReader>>>, AudioError> {
+    pub fn tap_reader_stream(
+        &self,
+    ) -> Result<impl Stream<Item = Option<Arc<TapReader>>>, AudioError> {
         let receiver = self.tap_reader_sender.subscribe();
         Ok(WatchStream::new(receiver))
     }
-
-    // pub fn fft_stream(&self) -> Result<impl Stream<Item = FftData>, AudioError> {
-    //     let receiver = self.fft_sender.subscribe();
-    //     Ok(WatchStream::new(receiver))
-    // }
-    //
-    // fn start_fft(&self, sample_rate: u32, reader: Arc<TapReader>) {
-    //     let mut handle = self.fft_thread_handle.lock();
-    //     if let Some(handle) = handle.take() {
-    //         handle.abort();
-    //     }
-    //
-    //     let cloned_sender = self.fft_sender.clone();
-    //     *handle = Some(self.tokio_runtime.spawn_blocking(move || {
-    //         run_custom_visualizer(
-    //             reader,
-    //             4096,
-    //             5,
-    //             20.0,
-    //             (sample_rate as f32) / 2.0,
-    //             false,
-    //             cloned_sender,
-    //         );
-    //     }));
-    // }
 }
 
 impl AudioEngine for RodioEngine {
@@ -190,7 +167,6 @@ impl AudioEngine for RodioEngine {
             Some(player) => {
                 player.clear();
                 let source = Decoder::try_from(cursor)?;
-                let sample_rate = source.sample_rate().get();
                 let (reader, adapter) = TapReader::<2>::new(source);
                 player.append(adapter);
                 player.play();
@@ -204,9 +180,18 @@ impl AudioEngine for RodioEngine {
         match self.player.read().as_ref() {
             None => Err(AudioError::NotInitialized),
             Some(player) => {
+                let length = streaming_reader.length();
+                if length.is_none() {
+                    return Err(AudioError::LengthRequired);
+                }
+                let length = length.unwrap();
+
                 player.clear();
-                let source = Decoder::new(streaming_reader)?;
-                let sample_rate = source.sample_rate().get();
+                let source = Decoder::builder()
+                    .with_seekable(true)
+                    .with_byte_len(length)
+                    .with_data(streaming_reader)
+                    .build()?;
                 let (reader, adapter) = TapReader::<2>::new(source);
                 player.append(adapter);
                 player.play();
@@ -233,8 +218,8 @@ mod tests {
     use crate::superstructure::audio::audio_player::RodioEngine;
     use crate::utils::streaming_reader::{SharedBuffer, StreamingReader};
     use futures_util::StreamExt;
-    use parking_lot::lock_api::Mutex;
     use parking_lot::Condvar;
+    use parking_lot::lock_api::Mutex;
     use std::fs::OpenOptions;
     use std::io::{Read, Write};
     use std::sync::Arc;
@@ -257,6 +242,7 @@ mod tests {
             data: Mutex::new(Vec::with_capacity(1024 * 64)),
             eof: Mutex::new(false),
             condvar: Condvar::new(),
+            length: Mutex::new(None),
         });
         let cloned_shared_buffer = shared_buffer.clone();
         thread::spawn(move || {
@@ -270,6 +256,10 @@ mod tests {
                     return;
                 }
             };
+            {
+                let length = response.content_length();
+                *cloned_shared_buffer.length.lock() = length;
+            }
 
             let mut buf = vec![0u8; 8192];
             loop {
