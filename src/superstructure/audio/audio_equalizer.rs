@@ -30,8 +30,34 @@ impl<S> EqualizerSource<S> {
         EqualizerSource { source, equalizer }
     }
 
+    pub fn get_gain(&self, index: usize) -> f32 {
+        self.equalizer.get_design(index).gain
+    }
+
+    pub fn get_gains(&self) -> Vec<f32> {
+        let mut results = Vec::<f32>::new();
+        for i in 0..32 {
+            let gain = self.equalizer.get_design(i).gain;
+            results.push(gain);
+        }
+
+        results
+    }
+
     pub fn set_gain(&mut self, index: usize, gain: f32) {
         self.equalizer.set_gain(index, gain);
+    }
+
+    pub fn set_gains(&mut self, gains: Vec<f32>) {
+        gains.into_iter().enumerate().for_each(|(i, gain)| {
+            self.equalizer.set_gain(i, gain);
+        })
+    }
+
+    pub fn reset_gains(&mut self) {
+        for i in 0..32 {
+            self.equalizer.set_gain(i, 0.0);
+        }
     }
 }
 
@@ -43,9 +69,29 @@ impl<S> ArcEqualizerSource<S> {
         }
     }
 
+    pub fn get_gain(&self, index: usize) -> f32 {
+        let source = self.source.read();
+        source.get_gain(index)
+    }
+
+    pub fn get_gains(&self) -> Vec<f32> {
+        let source = self.source.read();
+        source.get_gains()
+    }
+
     pub fn set_gain(&self, index: usize, gain: f32) {
         let mut source = self.source.write();
         source.set_gain(index, gain)
+    }
+
+    pub fn set_gains(&self, gains: Vec<f32>) {
+        let mut source = self.source.write();
+        source.set_gains(gains)
+    }
+
+    pub fn reset_gains(&self) {
+        let mut source = self.source.write();
+        source.reset_gains()
     }
 }
 
