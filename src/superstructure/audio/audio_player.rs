@@ -1,5 +1,6 @@
 use crate::domain::models::audio_models::{AudioEngineStatus, AudioError};
 use crate::domain::traits::audio_traits::AudioEngine;
+use crate::superstructure::audio::audio_equalizer::{ArcEqualizerSource, EqualizerSource};
 use crate::utils::fft_visualiser::{FftData, run_custom_visualizer};
 use crate::utils::streaming_reader::StreamingReader;
 use bytes::Bytes;
@@ -46,6 +47,38 @@ impl RodioEngine {
     ) -> Result<impl Stream<Item = Option<Arc<TapReader>>>, AudioError> {
         let receiver = self.tap_reader_sender.subscribe();
         Ok(WatchStream::new(receiver))
+    }
+
+    pub fn play_stream_with_equalizer(
+        &self,
+        streaming_reader: StreamingReader,
+    ) -> Result<ArcEqualizerSource<Decoder<StreamingReader>>, AudioError> {
+        match self.player.read().as_ref() {
+            None => Err(AudioError::NotInitialized),
+            Some(player) => {
+                let length = streaming_reader.length();
+                if length.is_none() {
+                    return Err(AudioError::LengthRequired);
+                }
+                let length = length.unwrap();
+
+                player.clear();
+                let source = Decoder::builder()
+                    .with_seekable(true)
+                    .with_byte_len(length)
+                    .with_data(streaming_reader)
+                    .build()?;
+                let sample_rate = source.sample_rate().get();
+                let equalizer_source = ArcEqualizerSource::new(source, sample_rate);
+                let cloned_equalizer_source = equalizer_source.clone();
+
+                let (reader, adapter) = TapReader::<2>::new(equalizer_source);
+                player.append(adapter);
+                player.play();
+                let _ = self.tap_reader_sender.send(Some(reader));
+                Ok(cloned_equalizer_source)
+            }
+        }
     }
 }
 

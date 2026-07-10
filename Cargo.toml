@@ -45,6 +45,7 @@ rustfft = "6.4.1"
 num-complex = "0.4.6"
 arrayvec = "0.7.6"
 realfft = "3.5.0"
+simple-eq = { git = "https://github.com/m-hilgendorf/simple-eq.git" }
 
 [dev-dependencies]
 tokio-test = "*"
