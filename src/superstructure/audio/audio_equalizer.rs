@@ -47,6 +47,7 @@ impl<S> EqualizerSource<S> {
     }
 
     pub fn set_gain(&mut self, index: usize, gain: f32) {
+        self.equalizer.set_bypass(index, gain == 0.0);
         self.equalizer.set_gain(index, gain);
     }
 
