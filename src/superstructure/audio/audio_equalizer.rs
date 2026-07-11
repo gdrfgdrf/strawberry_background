@@ -1,8 +1,10 @@
+use std::io::{Seek, SeekFrom};
 use parking_lot::{Mutex, RwLock};
 use rodio::{ChannelCount, SampleRate, Source};
 use simple_eq::Equalizer;
 use std::sync::Arc;
 use std::time::Duration;
+use rodio::source::SeekError;
 
 const FREQUENCIES: [f32; 32] = [
     16.0, 20.0, 25.0, 32.0, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0, 200.0, 250.0, 320.0,
@@ -114,6 +116,10 @@ where
     fn total_duration(&self) -> Option<Duration> {
         self.source.total_duration()
     }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        self.source.try_seek(pos)
+    }
 }
 
 impl<S> Source for ArcEqualizerSource<S>
@@ -138,6 +144,11 @@ where
     fn total_duration(&self) -> Option<Duration> {
         let source = self.source.read();
         source.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        let mut source = self.source.write();
+        source.try_seek(pos)
     }
 }
 
@@ -164,12 +175,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut source = self.source.write();
-        let sample = source.source.next();
-        if sample.is_none() {
-            return None;
-        }
-        let sample = sample.unwrap();
-        Some(source.equalizer.process(sample))
+        source.next()
     }
 }
 
