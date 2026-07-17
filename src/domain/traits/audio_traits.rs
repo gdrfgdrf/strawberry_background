@@ -20,6 +20,9 @@ pub trait AudioEngine {
     fn resume(&self) -> Result<(), AudioError>;
     fn pause(&self) -> Result<(), AudioError>;
     fn seek(&self, position: Duration) -> Result<(), AudioError>;
+
+    fn get_volume(&self) -> Result<f32, AudioError>;
+    fn set_volume(&self, volume: f32) -> Result<(), AudioError>;
     
     fn play_cursor(&self, cursor: Cursor<Bytes>) -> Result<(), AudioError>;
     fn play_stream(&self, streaming_reader: StreamingReader) -> Result<(), AudioError>;

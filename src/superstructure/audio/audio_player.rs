@@ -194,6 +194,23 @@ impl AudioEngine for RodioEngine {
         }
     }
 
+    fn get_volume(&self) -> Result<f32, AudioError> {
+        match self.player.read().as_ref() {
+            None => Err(AudioError::NotInitialized),
+            Some(player) => Ok(player.volume()),
+        }
+    }
+
+    fn set_volume(&self, volume: f32) -> Result<(), AudioError> {
+        match self.player.read().as_ref() {
+            None => Err(AudioError::NotInitialized),
+            Some(player) => {
+                player.set_volume(volume);
+                Ok(())
+            }
+        }
+    }
+
     fn play_cursor(&self, cursor: Cursor<Bytes>) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
             None => Err(AudioError::NotInitialized),
