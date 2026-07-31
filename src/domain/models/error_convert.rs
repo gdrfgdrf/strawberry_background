@@ -1,4 +1,5 @@
 use std::sync::PoisonError;
+use android_media::MicError;
 use rodio::decoder::DecoderError;
 use rodio::DeviceSinkError;
 use rodio::source::SeekError;
@@ -100,6 +101,13 @@ impl From<DecoderError> for AudioError {
 
 impl From<SeekError> for AudioError {
     fn from(value: SeekError) -> Self {
+        AudioError::ErrorForward(value.to_string())
+    }
+}
+
+// #[cfg(target_os = "android")]
+impl From<MicError> for AudioError {
+    fn from(value: MicError) -> Self {
         AudioError::ErrorForward(value.to_string())
     }
 }

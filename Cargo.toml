@@ -49,9 +49,15 @@ simple-eq = { git = "https://github.com/m-hilgendorf/simple-eq.git" }
 aes = "0.8.4"
 base64 = "0.23.0"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+android-media = "0.1.1"
+jni = "0.21"
 
 [dev-dependencies]
 tokio-test = "*"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-media = "0.1.1"
+jni = "0.21"

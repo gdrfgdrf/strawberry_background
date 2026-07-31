@@ -1,9 +1,11 @@
-use crate::domain::models::audio_models::{AudioEngineStatus, AudioError};
+use crate::domain::models::audio_models::{AudioEngineStatus, AudioError, AudioRecordSource};
 use crate::utils::streaming_reader::StreamingReader;
 use bytes::Bytes;
 use futures_util::Stream;
 use std::io::Cursor;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync;
 
 pub trait AudioSource {
     fn init(&self) -> Result<(), AudioError>;
@@ -28,4 +30,10 @@ pub trait AudioEngine {
     fn play_stream(&self, streaming_reader: StreamingReader) -> Result<(), AudioError>;
     
     fn reset(&self) -> Result<(), AudioError>;
+}
+
+pub trait AudioRecorderBackend {
+    fn start(&self, source: AudioRecordSource) -> Result<impl Stream<Item = Vec<f32>>, AudioError>;
+    fn dispose(&self) -> Result<(), AudioError>;
+
 }

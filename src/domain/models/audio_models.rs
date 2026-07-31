@@ -7,7 +7,13 @@ pub enum AudioError {
     #[error("Not initialized")]
     NotInitialized,
     #[error("Length is required")]
-    LengthRequired
+    LengthRequired,
+    #[error("Platform mismatch")]
+    PlatformMismatch,
+    #[error("JNI Environment Required")]
+    JNIEnvironmentRequired,
+    #[error("Unsupported")]
+    Unsupported
 }
 
 #[derive(Clone)]
@@ -16,4 +22,10 @@ pub enum AudioEngineStatus {
     Paused,
     Finished,
     Playing,
+}
+
+#[derive(Clone)]
+pub enum AudioRecordSource {
+    Mic,
+    Device
 }

@@ -42,6 +42,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "android-media"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "571125162183b4bafb90f03eca10fc82bcb7b8459d13ae3d79cf84c9859c825a"
+dependencies = [
+ "encoding_rs",
+ "jni",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2241,6 +2253,7 @@ name = "strawberry_background"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "android-media",
  "arrayvec",
  "async-trait",
  "base64 0.23.0",
@@ -2250,6 +2263,7 @@ dependencies = [
  "flate2",
  "futures",
  "futures-util",
+ "jni",
  "lazy_static",
  "moka",
  "num-complex",
@@ -2757,7 +2771,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
  "pin-project-lite",
+ "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
