@@ -46,6 +46,9 @@ num-complex = "0.4.6"
 arrayvec = "0.7.6"
 realfft = "3.5.0"
 simple-eq = { git = "https://github.com/m-hilgendorf/simple-eq.git" }
+aes = "0.8.4"
+base64 = "0.23.0"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 tokio-test = "*"
