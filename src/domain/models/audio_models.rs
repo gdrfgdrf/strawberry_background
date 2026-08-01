@@ -12,6 +12,8 @@ pub enum AudioError {
     PlatformMismatch,
     #[error("JNI Environment Required")]
     JNIEnvironmentRequired,
+    #[error("No default output device")]
+    NoDefaultOutputDevice,
     #[error("Unsupported")]
     Unsupported
 }

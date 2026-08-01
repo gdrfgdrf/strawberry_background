@@ -2,17 +2,25 @@ use crate::domain::models::audio_models::{AudioError, AudioRecordSource};
 use crate::domain::traits::audio_traits::AudioRecorderBackend;
 #[cfg(target_os = "android")]
 use android_media::{AudioEncoding, AudioMicrophone, ChannelInConfig, SampleRate};
+#[cfg(target_os = "windows")]
+use audio_recorder_rs::Recorder;
+use cpal::Device;
+use cpal::traits::HostTrait;
+use crossbeam_channel::Receiver;
 use futures::Stream;
 #[cfg(target_os = "android")]
 use jni::JNIEnv;
 #[cfg(target_os = "android")]
 use jni::objects::GlobalRef;
 use parking_lot::RwLock;
+#[cfg(target_os = "android")]
 use std::sync::Arc;
+#[cfg(target_os = "android")]
 use std::time::Duration;
-use tokio::sync::watch::{Sender, channel};
-use tokio::task::{AbortHandle, spawn_blocking};
-use tokio_stream::wrappers::WatchStream;
+use tokio::sync::mpsc;
+#[cfg(target_os = "android")]
+use tokio::task::AbortHandle;
+use tokio::task::spawn_blocking;
 
 pub struct AudioRecorder<T: AudioRecorderBackend> {
     backend: T,
@@ -35,12 +43,156 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub struct DesktopAudioRecorderBackend {
+    recoder: RwLock<Option<Recorder>>,
+}
+
+#[cfg(target_os = "windows")]
+impl DesktopAudioRecorderBackend {
+    pub fn new() -> DesktopAudioRecorderBackend {
+        DesktopAudioRecorderBackend {
+            recoder: RwLock::new(Some(Recorder::new()))
+        }
+    }
+
+    pub fn crossbeam_to_stream<T: Send + 'static>(
+        rx: Receiver<T>,
+        buffer: usize,
+    ) -> impl Stream<Item = T> {
+        let (tx, stream_rx) = mpsc::channel(buffer);
+
+        spawn_blocking(move || {
+            while let Ok(item) = rx.recv() {
+                if tx.blocking_send(item).is_err() {
+                    break;
+                }
+            }
+        });
+
+        tokio_stream::wrappers::ReceiverStream::new(stream_rx)
+    }
+
+    /// copied from audio_recorder_rs's get_default_device.rs
+    pub fn get_default_output_device() -> Result<Device, AudioError> {
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(host) = cpal::host_from_id(cpal::HostId::ScreenCaptureKit) {
+                if let Some(device) = host.default_input_device() {
+                    return Ok(device);
+                }
+            }
+            let host = cpal::default_host();
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    return Err(AudioError::NoDefaultOutputDevice);
+                }
+            };
+
+            return Ok(device);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(wasapi_host) = cpal::host_from_id(cpal::HostId::Wasapi) {
+                if let Some(device) = wasapi_host.default_output_device() {
+                    return Ok(device);
+                }
+            }
+
+            let host = cpal::default_host();
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    return Err(AudioError::NoDefaultOutputDevice);
+                }
+            };
+
+            Ok(device)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let host = cpal::default_host();
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    return Err(AudioError::NoDefaultOutputDevice);
+                }
+            };
+
+            Ok(device)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            let host = cpal::default_host();
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    return Err(AudioError::NoDefaultOutputDevice);
+                }
+            };
+
+            Ok(device)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl AudioRecorderBackend for DesktopAudioRecorderBackend {
+    fn start(&self, source: AudioRecordSource) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
+        let mut recorder = self.recoder.write();
+        if recorder.is_none() {
+            return Err(AudioError::NotInitialized);
+        }
+        let recorder = recorder.as_mut().unwrap();
+        match source {
+            AudioRecordSource::Mic => {
+                let receiver = recorder
+                    .start(true)
+                    .map_err(|e| AudioError::ErrorForward(e.to_string()))?;
+                Ok(Self::crossbeam_to_stream(receiver, 300))
+            }
+            AudioRecordSource::Device => {
+                let output_device = Self::get_default_output_device()?;
+                let receiver = recorder
+                    .record_single_device(output_device)
+                    .map_err(|e| AudioError::ErrorForward(e.to_string()))?;
+                Ok(Self::crossbeam_to_stream(receiver, 300))
+            }
+        }
+    }
+
+    fn dispose(&self) -> Result<(), AudioError> {
+        let mut recorder = self.recoder.write();
+        if recorder.is_some() {
+            recorder.take().unwrap().stop();
+        }
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "android")]
 pub struct AndroidAudioRecorderBackend<'local> {
     env: RwLock<Option<JNIEnv<'local>>>,
     context: GlobalRef,
     mic: RwLock<Option<Arc<AudioMicrophone>>>,
     mic_stream: RwLock<Option<Arc<AudioMicrophoneStream>>>,
+}
+
+#[cfg(target_os = "android")]
+impl<'local> AndroidAudioRecorderBackend<'local> {
+    pub fn new(env: JNIEnv<'local>, context: GlobalRef) -> AndroidAudioRecorderBackend {
+        Self {
+            env: RwLock::new(Some(env)),
+            context,
+            mic: RwLock::new(None),
+            mic_stream: RwLock::new(None)
+        }
+    }
+
 }
 
 #[cfg(target_os = "android")]
