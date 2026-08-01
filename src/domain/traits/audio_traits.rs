@@ -35,5 +35,4 @@ pub trait AudioEngine {
 pub trait AudioRecorderBackend {
     fn start(&self, source: AudioRecordSource) -> Result<impl Stream<Item = Vec<f32>>, AudioError>;
     fn dispose(&self) -> Result<(), AudioError>;
-
 }

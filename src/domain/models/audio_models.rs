@@ -15,7 +15,13 @@ pub enum AudioError {
     #[error("No default output device")]
     NoDefaultOutputDevice,
     #[error("Unsupported")]
-    Unsupported
+    Unsupported,
+    #[error("Already Recording")]
+    AlreadyRecording,
+    #[error("Not Recording")]
+    NotRecording,
+    #[error("Recorder Disposed")]
+    RecorderDisposed,
 }
 
 #[derive(Clone)]

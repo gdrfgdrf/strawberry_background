@@ -8,13 +8,16 @@ use cpal::Device;
 use cpal::traits::HostTrait;
 use crossbeam_channel::Receiver;
 use futures::Stream;
+use futures_util::StreamExt;
 #[cfg(target_os = "android")]
 use jni::JNIEnv;
 #[cfg(target_os = "android")]
 use jni::objects::GlobalRef;
-use parking_lot::RwLock;
-#[cfg(target_os = "android")]
-use std::sync::Arc;
+use parking_lot::{Mutex, RwLock};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
+use std::task::{Context, Poll, Waker};
 #[cfg(target_os = "android")]
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -22,24 +25,172 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 use tokio::task::spawn_blocking;
 
+struct RecordingStateInner {
+    paused: AtomicBool,
+    stopped: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+enum RecorderState {
+    Idle,
+    Recording(Arc<RecordingStateInner>),
+}
+
 pub struct AudioRecorder<T: AudioRecorderBackend> {
     backend: T,
+    state: Arc<Mutex<RecorderState>>,
+    disposed: AtomicBool,
 }
 
 impl<T: AudioRecorderBackend> AudioRecorder<T> {
     pub fn new(backend: T) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            state: Arc::new(Mutex::new(RecorderState::Idle)),
+            disposed: AtomicBool::new(false),
+        }
     }
 
     pub fn start(
         &self,
         source: AudioRecordSource,
     ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
-        self.backend.start(source)
+        if self.disposed.load(Ordering::Acquire) {
+            return Err(AudioError::RecorderDisposed);
+        }
+
+        let mut guard = self.state.lock();
+        match &*guard {
+            RecorderState::Idle => {
+                let inner_stream = self.backend.start(source)?;
+                let recording_inner = Arc::new(RecordingStateInner {
+                    paused: AtomicBool::new(false),
+                    stopped: AtomicBool::new(false),
+                    waker: Mutex::new(None),
+                });
+                *guard = RecorderState::Recording(recording_inner.clone());
+                Ok(RecordingStream {
+                    inner: Box::pin(inner_stream),
+                    state_inner: recording_inner,
+                    recorder_state: Arc::downgrade(&self.state),
+                })
+            }
+            _ => Err(AudioError::AlreadyRecording),
+        }
+    }
+
+    pub fn pause(&self) -> Result<(), AudioError> {
+        self.ensure_active()?;
+        let guard = self.state.lock();
+        if let RecorderState::Recording(ref inner) = *guard {
+            inner.paused.store(true, Ordering::Release);
+            return Ok(());
+        }
+        Err(AudioError::NotRecording)
+    }
+
+    pub fn resume(&self) -> Result<(), AudioError> {
+        self.ensure_active()?;
+        let guard = self.state.lock();
+        if let RecorderState::Recording(ref inner) = *guard {
+            inner.paused.store(false, Ordering::Release);
+            if let Some(waker) = inner.waker.lock().take() {
+                waker.wake();
+            }
+            Ok(())
+        } else {
+            Err(AudioError::NotRecording)
+        }
+    }
+
+    pub fn stop(&self) -> Result<(), AudioError> {
+        self.ensure_active()?;
+        let mut guard = self.state.lock();
+        let old_state = std::mem::replace(&mut *guard, RecorderState::Idle);
+        match old_state {
+            RecorderState::Recording(inner) => {
+                inner.stopped.store(true, Ordering::Release);
+                if let Some(waker) = inner.waker.lock().take() {
+                    waker.wake();
+                }
+                Ok(())
+            }
+            _ => Err(AudioError::NotRecording),
+        }
+    }
+
+    pub fn is_recording(&self) -> bool {
+        matches!(*self.state.lock(), RecorderState::Recording(_))
+    }
+
+    pub fn is_paused(&self) -> bool {
+        if let RecorderState::Recording(ref inner) = *self.state.lock() {
+            return inner.paused.load(Ordering::Acquire);
+        }
+        false
+    }
+
+    pub fn is_disposed(&self) -> bool {
+        self.disposed.load(Ordering::Acquire)
     }
 
     pub fn dispose(&self) -> Result<(), AudioError> {
+        if self.disposed.swap(true, Ordering::AcqRel) {
+            return Err(AudioError::RecorderDisposed);
+        }
+        let _ = self.stop();
         self.backend.dispose()
+    }
+
+    fn ensure_active(&self) -> Result<(), AudioError> {
+        if self.disposed.load(Ordering::Acquire) {
+            return Err(AudioError::RecorderDisposed);
+        }
+        Ok(())
+    }
+}
+
+struct RecordingStream<S> {
+    inner: S,
+    state_inner: Arc<RecordingStateInner>,
+    recorder_state: Weak<Mutex<RecorderState>>,
+}
+
+impl<S: Stream<Item = Vec<f32>> + Unpin> Stream for RecordingStream<S> {
+    type Item = Vec<f32>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        if this.state_inner.stopped.load(Ordering::Acquire) {
+            return Poll::Ready(None);
+        }
+
+        if this.state_inner.paused.load(Ordering::Acquire) {
+            *this.state_inner.waker.lock() = Some(context.waker().clone());
+            return Poll::Pending;
+        }
+
+        this.inner.poll_next_unpin(context)
+    }
+}
+
+impl<S> Drop for RecordingStream<S> {
+    fn drop(&mut self) {
+        self.state_inner.stopped.store(true, Ordering::Release);
+        if let Some(waker) = self.state_inner.waker.lock().take() {
+            waker.wake();
+        }
+
+        if let Some(state_arc) = self.recorder_state.upgrade() {
+            let mut guard = state_arc.lock();
+            if matches!(
+                &*guard,
+                RecorderState::Recording(inner) if Arc::ptr_eq(inner, &self.state_inner)
+            ) {
+                *guard = RecorderState::Idle;
+            }
+        }
     }
 }
 
@@ -52,7 +203,7 @@ pub struct DesktopAudioRecorderBackend {
 impl DesktopAudioRecorderBackend {
     pub fn new() -> DesktopAudioRecorderBackend {
         DesktopAudioRecorderBackend {
-            recoder: RwLock::new(Some(Recorder::new()))
+            recoder: RwLock::new(Some(Recorder::new())),
         }
     }
 
@@ -189,10 +340,9 @@ impl<'local> AndroidAudioRecorderBackend<'local> {
             env: RwLock::new(Some(env)),
             context,
             mic: RwLock::new(None),
-            mic_stream: RwLock::new(None)
+            mic_stream: RwLock::new(None),
         }
     }
-
 }
 
 #[cfg(target_os = "android")]
