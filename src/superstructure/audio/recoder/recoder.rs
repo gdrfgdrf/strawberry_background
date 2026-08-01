@@ -309,7 +309,7 @@ impl AudioRecorderBackend for DesktopAudioRecorderBackend {
             AudioRecordSource::Device => {
                 let output_device = Self::get_default_output_device()?;
                 let receiver = recorder
-                    .record_single_device(output_device)
+                    .record_single_device(output_device, false)
                     .map_err(|e| AudioError::ErrorForward(e.to_string()))?;
                 Ok(Self::crossbeam_to_stream(receiver, 300))
             }
@@ -452,5 +452,30 @@ impl AudioMicrophoneStream {
 impl Drop for AudioMicrophoneStream {
     fn drop(&mut self) {
         self.abort_handle.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::StreamExt;
+    use crate::domain::models::audio_models::AudioRecordSource;
+    use crate::superstructure::audio::recoder::recoder::{AudioRecorder, DesktopAudioRecorderBackend};
+
+    macro_rules! await_test {
+        ($e:expr) => {
+            tokio_test::block_on($e)
+        };
+    }
+
+    #[test]
+    fn test() {
+        let recorder = AudioRecorder::new(DesktopAudioRecorderBackend::new());
+        let mut stream = recorder.start(AudioRecordSource::Device).unwrap();
+        while let Some(data) = await_test!(stream.next()) {
+            println!("length: {}", data.len());
+
+        }
+
+
     }
 }

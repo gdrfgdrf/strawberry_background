@@ -111,7 +111,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "audio-recorder-rs"
 version = "0.1.0"
-source = "git+https://github.com/gdrfgdrf/audio-recorder-rs#8edd33f0fc18593b96706d700815c8eab208c96b"
+source = "git+https://github.com/gdrfgdrf/audio-recorder-rs#0b2e2bae11249bb5b952b2b668c586bedce5504e"
 dependencies = [
  "cpal",
  "crossbeam-channel",
