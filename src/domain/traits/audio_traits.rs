@@ -25,14 +25,20 @@ pub trait AudioEngine {
 
     fn get_volume(&self) -> Result<f32, AudioError>;
     fn set_volume(&self, volume: f32) -> Result<(), AudioError>;
-    
+
     fn play_cursor(&self, cursor: Cursor<Bytes>) -> Result<(), AudioError>;
     fn play_stream(&self, streaming_reader: StreamingReader) -> Result<(), AudioError>;
-    
+
     fn reset(&self) -> Result<(), AudioError>;
 }
 
 pub trait AudioRecorderBackend {
-    fn start(&self, source: AudioRecordSource) -> Result<impl Stream<Item = Vec<f32>>, AudioError>;
+    fn start(
+        &self,
+        source: AudioRecordSource,
+        sample_rate: Option<u32>,
+        channels: Option<u16>,
+        sample_size: Option<u32>,
+    ) -> Result<impl Stream<Item = Vec<f32>>, AudioError>;
     fn dispose(&self) -> Result<(), AudioError>;
 }

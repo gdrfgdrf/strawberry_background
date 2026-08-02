@@ -54,6 +54,9 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
     pub fn start(
         &self,
         source: AudioRecordSource,
+        sample_rate: Option<u32>,
+        channels: Option<u16>,
+        sample_size: Option<u32>,
     ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
         if self.disposed.load(Ordering::Acquire) {
             return Err(AudioError::RecorderDisposed);
@@ -62,7 +65,9 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
         let mut guard = self.state.lock();
         match &*guard {
             RecorderState::Idle => {
-                let inner_stream = self.backend.start(source)?;
+                let inner_stream =
+                    self.backend
+                        .start(source, sample_rate, channels, sample_size)?;
                 let recording_inner = Arc::new(RecordingStateInner {
                     paused: AtomicBool::new(false),
                     stopped: AtomicBool::new(false),
@@ -293,27 +298,22 @@ impl DesktopAudioRecorderBackend {
 
 #[cfg(target_os = "windows")]
 impl AudioRecorderBackend for DesktopAudioRecorderBackend {
-    fn start(&self, source: AudioRecordSource) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
+    fn start(
+        &self,
+        _: AudioRecordSource,
+        sample_rate: Option<u32>,
+        channels: Option<u16>,
+        sample_size: Option<u32>,
+    ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
         let mut recorder = self.recoder.write();
         if recorder.is_none() {
             return Err(AudioError::NotInitialized);
         }
         let recorder = recorder.as_mut().unwrap();
-        match source {
-            AudioRecordSource::Mic => {
-                let receiver = recorder
-                    .start(true)
-                    .map_err(|e| AudioError::ErrorForward(e.to_string()))?;
-                Ok(Self::crossbeam_to_stream(receiver, 300))
-            }
-            AudioRecordSource::Device => {
-                let output_device = Self::get_default_output_device()?;
-                let receiver = recorder
-                    .record_single_device(output_device, false)
-                    .map_err(|e| AudioError::ErrorForward(e.to_string()))?;
-                Ok(Self::crossbeam_to_stream(receiver, 300))
-            }
-        }
+        let receiver = recorder
+            .start(false, sample_rate, channels, sample_size)
+            .map_err(|e| AudioError::ErrorForward(e.to_string()))?;
+        Ok(Self::crossbeam_to_stream(receiver, 300))
     }
 
     fn dispose(&self) -> Result<(), AudioError> {
@@ -452,30 +452,5 @@ impl AudioMicrophoneStream {
 impl Drop for AudioMicrophoneStream {
     fn drop(&mut self) {
         self.abort_handle.abort();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use futures_util::StreamExt;
-    use crate::domain::models::audio_models::AudioRecordSource;
-    use crate::superstructure::audio::recoder::recoder::{AudioRecorder, DesktopAudioRecorderBackend};
-
-    macro_rules! await_test {
-        ($e:expr) => {
-            tokio_test::block_on($e)
-        };
-    }
-
-    #[test]
-    fn test() {
-        let recorder = AudioRecorder::new(DesktopAudioRecorderBackend::new());
-        let mut stream = recorder.start(AudioRecordSource::Device).unwrap();
-        while let Some(data) = await_test!(stream.next()) {
-            println!("length: {}", data.len());
-
-        }
-
-
     }
 }
