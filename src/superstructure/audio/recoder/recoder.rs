@@ -45,7 +45,7 @@ pub struct AudioRecorder<T: AudioRecorderBackend + Debug> {
     backend: T,
     state: Arc<Mutex<RecorderState>>,
     disposed: AtomicBool,
-    _session: tracing::span::Span,
+    _session: span::Span,
 }
 
 impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
@@ -235,9 +235,10 @@ impl<S> Drop for RecordingStream<S> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+#[derive(Debug)]
 pub struct DesktopAudioRecorderBackend {
     recoder: RwLock<Option<Recorder>>,
-    _session: tracing::span::Span
+    _session: span::Span
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
