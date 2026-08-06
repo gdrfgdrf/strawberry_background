@@ -86,7 +86,6 @@ impl DefaultFileCacheManager {
         tracing::debug!(
             path = ?path,
             auto_save_interval = ?auto_save_interval.as_millis(),
-            channel = ?channel,
             "creating default file cache manager"
         );
 
