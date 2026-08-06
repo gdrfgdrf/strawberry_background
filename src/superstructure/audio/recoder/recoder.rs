@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use crate::domain::models::audio_models::{AudioError, AudioRecordSource};
 use crate::domain::traits::audio_traits::AudioRecorderBackend;
 #[cfg(target_os = "android")]
@@ -24,33 +25,41 @@ use tokio::sync::mpsc;
 #[cfg(target_os = "android")]
 use tokio::task::AbortHandle;
 use tokio::task::spawn_blocking;
+use tracing::{span, Level};
 
+#[derive(Debug)]
 struct RecordingStateInner {
     paused: AtomicBool,
     stopped: AtomicBool,
     waker: Mutex<Option<Waker>>,
 }
 
+#[derive(Debug)]
 enum RecorderState {
     Idle,
     Recording(Arc<RecordingStateInner>),
 }
 
-pub struct AudioRecorder<T: AudioRecorderBackend> {
+#[derive(Debug)]
+pub struct AudioRecorder<T: AudioRecorderBackend + Debug> {
     backend: T,
     state: Arc<Mutex<RecorderState>>,
     disposed: AtomicBool,
+    _session: tracing::span::Span,
 }
 
-impl<T: AudioRecorderBackend> AudioRecorder<T> {
+impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
     pub fn new(backend: T) -> Self {
+        let span = span!(Level::INFO, "audio_recorder");
         Self {
             backend,
             state: Arc::new(Mutex::new(RecorderState::Idle)),
             disposed: AtomicBool::new(false),
+            _session: span
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn start(
         &self,
         source: AudioRecordSource,
@@ -59,12 +68,14 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
         sample_size: Option<u32>,
     ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
         if self.disposed.load(Ordering::Acquire) {
+            tracing::debug!("recorder has been disposed");
             return Err(AudioError::RecorderDisposed);
         }
 
         let mut guard = self.state.lock();
         match &*guard {
             RecorderState::Idle => {
+                tracing::debug!(?source, ?sample_rate, ?channels, "starting backend");
                 let inner_stream =
                     self.backend
                         .start(source, sample_rate, channels, sample_size)?;
@@ -80,26 +91,34 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
                     recorder_state: Arc::downgrade(&self.state),
                 })
             }
-            _ => Err(AudioError::AlreadyRecording),
+            _ => {
+                tracing::debug!(state = ?*guard, "recorder not idle");
+                Err(AudioError::AlreadyRecording)
+            },
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn pause(&self) -> Result<(), AudioError> {
         self.ensure_active()?;
         let guard = self.state.lock();
         if let RecorderState::Recording(ref inner) = *guard {
+            tracing::debug!("state acquired");
             inner.paused.store(true, Ordering::Release);
             return Ok(());
         }
         Err(AudioError::NotRecording)
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn resume(&self) -> Result<(), AudioError> {
         self.ensure_active()?;
         let guard = self.state.lock();
         if let RecorderState::Recording(ref inner) = *guard {
+            tracing::debug!("state acquired");
             inner.paused.store(false, Ordering::Release);
             if let Some(waker) = inner.waker.lock().take() {
+                tracing::debug!("waker acquired");
                 waker.wake();
             }
             Ok(())
@@ -108,10 +127,15 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
         }
     }
 
-    pub fn stop(&self) -> Result<(), AudioError> {
+    fn stop_internal(&self) -> Result<(), AudioError> {
         self.ensure_active()?;
-        let mut guard = self.state.lock();
-        let old_state = std::mem::replace(&mut *guard, RecorderState::Idle);
+
+        let old_state = {
+            let mut guard = self.state.lock();
+            std::mem::replace(&mut *guard, RecorderState::Idle)
+        };
+        tracing::debug!(?old_state, "state replaced");
+
         match old_state {
             RecorderState::Recording(inner) => {
                 inner.stopped.store(true, Ordering::Release);
@@ -120,8 +144,16 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
                 }
                 Ok(())
             }
-            _ => Err(AudioError::NotRecording),
+            _ => {
+                tracing::debug!("not recording");
+                Err(AudioError::NotRecording)
+            }
         }
+    }
+
+    #[tracing::instrument(skip(self), parent = &self._session)]
+    pub fn stop(&self) -> Result<(), AudioError> {
+        self.stop_internal()
     }
 
     pub fn is_recording(&self) -> bool {
@@ -139,11 +171,14 @@ impl<T: AudioRecorderBackend> AudioRecorder<T> {
         self.disposed.load(Ordering::Acquire)
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn dispose(&self) -> Result<(), AudioError> {
         if self.disposed.swap(true, Ordering::AcqRel) {
             return Err(AudioError::RecorderDisposed);
         }
-        let _ = self.stop();
+        let stop_span = tracing::span!(parent: tracing::Span::current(), Level::INFO, "stop");
+        let _enter = stop_span.enter();
+        let _ = self.stop_internal();
         self.backend.dispose()
     }
 
@@ -199,16 +234,18 @@ impl<S> Drop for RecordingStream<S> {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub struct DesktopAudioRecorderBackend {
     recoder: RwLock<Option<Recorder>>,
+    _session: tracing::span::Span
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl DesktopAudioRecorderBackend {
     pub fn new() -> DesktopAudioRecorderBackend {
         DesktopAudioRecorderBackend {
             recoder: RwLock::new(Some(Recorder::new())),
+            _session: span!(Level::INFO, "desktop-audio-recorder-backend")
         }
     }
 
@@ -296,8 +333,9 @@ impl DesktopAudioRecorderBackend {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 impl AudioRecorderBackend for DesktopAudioRecorderBackend {
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn start(
         &self,
         _: AudioRecordSource,
@@ -307,15 +345,18 @@ impl AudioRecorderBackend for DesktopAudioRecorderBackend {
     ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
         let mut recorder = self.recoder.write();
         if recorder.is_none() {
+            tracing::debug!("not initialized");
             return Err(AudioError::NotInitialized);
         }
         let recorder = recorder.as_mut().unwrap();
+        tracing::debug!(?sample_rate, ?channels, ?sample_size, "start recorder");
         let receiver = recorder
             .start(false, sample_rate, channels, sample_size)
             .map_err(|e| AudioError::ErrorForward(e.to_string()))?;
         Ok(Self::crossbeam_to_stream(receiver, 300))
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn dispose(&self) -> Result<(), AudioError> {
         let mut recorder = self.recoder.write();
         if recorder.is_some() {

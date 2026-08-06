@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Debug)]
 pub struct ReadFile {
     pub path: String,
     pub timeout: Duration,
 }
 
+#[derive(Debug)]
 pub struct WriteFile<'a> {
     pub path: String,
     pub mode: WriteMode,

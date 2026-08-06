@@ -1,16 +1,19 @@
-use std::sync::Arc;
+use crate::domain::models::monitor_models::{
+    EventStage, MonitorEvent, MonitorHttpData, MonitorStorageData, Progress,
+};
 use crate::domain::models::storage_models::{
     EnsureMode, ReadFile, StorageError, WriteFile, WriteMode,
 };
+use crate::domain::traits::monitor_traits::Monitor;
 use crate::domain::traits::storage_traits::StorageManager;
+use crate::monitor::monitor_service::monitoring;
 use crate::utils::keyed_rw_lock::KeyedRwLock;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::fs::{OpenOptions, read, try_exists};
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
-use crate::domain::models::monitor_models::{EventStage, MonitorEvent, MonitorHttpData, MonitorStorageData, Progress};
-use crate::domain::traits::monitor_traits::Monitor;
-use crate::monitor::monitor_service::monitoring;
+use tracing::{Level, span};
 
 macro_rules! match_timeout {
     ( $x:expr, $y:expr ) => {{
@@ -48,28 +51,32 @@ fn send_monitor_event(
 
 pub struct AsyncStorageManager {
     keys: KeyedRwLock<()>,
+    _session: span::Span,
 }
 
 impl AsyncStorageManager {
     pub fn new() -> Self {
         Self {
             keys: KeyedRwLock::new(),
+            _session: span!(Level::INFO, "async-storage-manager"),
         }
     }
 }
 
 #[async_trait]
 impl StorageManager for AsyncStorageManager {
+    #[tracing::instrument(skip(self))]
     async fn read(&self, request: ReadFile) -> Result<Vec<u8>, StorageError> {
         let path = request.path;
-        let exists = try_exists(&path)
-            .await
-            .map_err(|e| StorageError::IOError(e.to_string()))?;
-        
+        let exists = try_exists(&path).await.map_err(|e| {
+            tracing::debug!(error = %e, "check if file exists error");
+            StorageError::IOError(e.to_string())
+        })?;
+
         monitoring(|monitor| {
             send_monitor_event(monitor, &path, EventStage::Started, None);
         });
-        
+
         if !exists {
             monitoring(|monitor| {
                 send_monitor_event(monitor, &path, EventStage::Failed, None);
@@ -81,8 +88,14 @@ impl StorageManager for AsyncStorageManager {
             .read(&path, |_| async {
                 match timeout(request.timeout, read(path.clone())).await {
                     Ok(Ok(data)) => Ok(data),
-                    Ok(Err(e)) => Err(StorageError::IOError(e.to_string())),
-                    Err(timeout) => Err(StorageError::Timeout(timeout.to_string())),
+                    Ok(Err(e)) => {
+                        tracing::debug!(error = %e, "read file error");
+                        Err(StorageError::IOError(e.to_string()))
+                    }
+                    Err(timeout) => {
+                        tracing::debug!(error = %timeout, "read file timeout");
+                        Err(StorageError::Timeout(timeout.to_string()))
+                    }
                 }
             })
             .await
@@ -93,19 +106,30 @@ impl StorageManager for AsyncStorageManager {
                 })
             })
             .inspect_err(|e| {
+                tracing::debug!(error = %e, "read file error");
                 monitoring(|monitor| {
                     send_monitor_event(monitor, &path, EventStage::Failed, None);
                 })
             })
     }
 
+    #[tracing::instrument(skip(self, request))]
     async fn write<'a>(&self, request: WriteFile<'a>) -> Result<(), StorageError> {
+        tracing::debug!(
+            path = ?request.path, 
+            mode = ?request.mode, 
+            timeout = ?request.timeout.as_millis(),
+            ensure_mode = ?request.ensure_mode, 
+            data_length = ?request.data.len(), 
+            "writing file"
+        );
+
         let path = request.path;
-        
+
         monitoring(|monitor| {
             send_monitor_event(monitor, &path, EventStage::Started, None);
         });
-        
+
         self.keys
             .write(&path.clone(), |_| async {
                 let mut file = OpenOptions::new()
@@ -114,7 +138,10 @@ impl StorageManager for AsyncStorageManager {
                     .write(request.mode == WriteMode::Cover)
                     .open(path.clone())
                     .await
-                    .map_err(|e| StorageError::IOError(e.to_string()))?;
+                    .map_err(|e| {
+                        tracing::debug!(error = %e, "open file error");
+                        StorageError::IOError(e.to_string())
+                    })?;
 
                 return match timeout(request.timeout, file.write_all(request.data)).await {
                     Ok(Ok(())) => {
@@ -133,8 +160,14 @@ impl StorageManager for AsyncStorageManager {
                         }
                         Ok(())
                     }
-                    Ok(Err(e)) => Err(StorageError::IOError(e.to_string())),
-                    Err(timeout) => Err(StorageError::Timeout(timeout.to_string())),
+                    Ok(Err(e)) => {
+                        tracing::debug!(error = %e, "write file error");
+                        Err(StorageError::IOError(e.to_string()))
+                    },
+                    Err(timeout) => {
+                        tracing::debug!(error = %timeout, "write file timeout");
+                        Err(StorageError::Timeout(timeout.to_string()))
+                    },
                 };
             })
             .await
@@ -145,6 +178,7 @@ impl StorageManager for AsyncStorageManager {
                 })
             })
             .inspect_err(|e| {
+                tracing::debug!(error = %e, "write file error");
                 monitoring(|monitor| {
                     send_monitor_event(monitor, &path, EventStage::Failed, None);
                 })

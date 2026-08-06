@@ -59,6 +59,7 @@ const DEFAULT_EXTRACT_CONFIG: ExtractConfig = ExtractConfig {
     average_threshold: 1.0,
 };
 
+#[tracing::instrument(skip(samples))]
 pub fn generate(samples: &[f32]) -> Result<Fingerprint, String> {
     let generated = generate_binary(samples)?;
     Ok(Fingerprint {
@@ -429,33 +430,4 @@ fn encrypt_raw_fingerprint(raw: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use crate::superstructure::audio::recognition::fingerprint_generator::generate;
     use std::error::Error;
-
-    fn parse_vec_f32_from_file() -> Result<Vec<f32>, Box<dyn Error>> {
-        let content = String::from_utf8(Vec::from(include_bytes!("output.txt")))?;
-        let content = content.trim();
-
-        let inner = content
-            .strip_prefix("vec![")
-            .and_then(|s| s.strip_suffix(']'))
-            .ok_or("need vec![ or ]")?;
-
-        if inner.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut vec = Vec::new();
-        for part in inner.split(',') {
-            let num_str = part.trim().strip_suffix("_f32").ok_or("missing _f32")?;
-            let value: f32 = num_str.parse()?;
-            vec.push(value);
-        }
-        Ok(vec)
-    }
-
-    #[test]
-    fn test() {
-        let samples = parse_vec_f32_from_file().unwrap();
-        let result = generate(&samples).unwrap();
-        println!("{}", result.encoded);
-    }
 }

@@ -24,7 +24,7 @@ pub enum AudioError {
     RecorderDisposed,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AudioEngineStatus {
     Default,
     Paused,
@@ -32,7 +32,7 @@ pub enum AudioEngineStatus {
     Playing,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AudioRecordSource {
     Mic,
     Device

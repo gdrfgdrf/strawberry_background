@@ -3,6 +3,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct SharedBuffer {
     pub data: Mutex<Vec<u8>>,
     pub eof: Mutex<bool>,
@@ -10,6 +11,7 @@ pub struct SharedBuffer {
     pub length: Mutex<Option<u64>>
 }
 
+#[derive(Debug)]
 pub struct StreamingReader {
     shared: Arc<SharedBuffer>,
     pos: usize,

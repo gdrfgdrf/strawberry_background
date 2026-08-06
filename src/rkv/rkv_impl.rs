@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use tracing::{span, Level};
 
 pub static RKV_SERVICE: RwLock<Option<RkvService>> = RwLock::new(None);
 
@@ -24,16 +25,23 @@ pub fn initialize_rkv(main_path: String) {
 pub struct RkvService {
     pub main_path: String,
     env: Option<Arc<RwLock<Rkv<SafeModeEnvironment>>>>,
+    _session: span::Span
 }
 
 impl RkvService {
     pub fn new(main_path: String) -> Self {
+        let session = span!(Level::INFO, "rkv-service");
+        let _ = session.enter();
+        tracing::debug!(path = ?main_path, "creating rkv service");
+
         Self {
             main_path,
             env: None,
+            _session: session
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn init_db(&mut self, name: &str) -> Result<SingleStore<SafeModeDatabase>, Box<dyn Error>> {
         if self.env.is_none() {
             let path = self.main_path.as_str();
@@ -56,6 +64,7 @@ impl RkvService {
         Ok(store)
     }
 
+    #[tracing::instrument(skip(self, store, key, data), parent = &self._session)]
     pub fn write_rkyv_cache_channel_data(
         &self,
         store: &SingleStore<SafeModeDatabase>,
@@ -63,7 +72,10 @@ impl RkvService {
         data: &CacheChannel,
     ) -> Result<(), Box<dyn Error>> {
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(data)
-            .map_err(|e| format!("rkyv serialization failed: {}", e))?;
+            .map_err(|e| {
+                tracing::debug!(error = %e, "rkyv serialization error");
+                format!("rkyv serialization failed: {}", e)
+            })?;
 
         let env = self.env.as_ref().unwrap().read().unwrap();
         let mut writer = env.write()?;
@@ -73,6 +85,7 @@ impl RkvService {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, store, key), parent = &self._session)]
     pub fn read_rkyv_cache_channel_data(
         &self,
         store: &SingleStore<SafeModeDatabase>,

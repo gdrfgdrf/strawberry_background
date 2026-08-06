@@ -15,9 +15,9 @@ use std::thread::sleep;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync;
-use tokio::task::JoinHandle;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tokio_util::sync::CancellationToken;
+use tracing::Level;
 
 pub struct RodioEngine {
     handle: RwLock<Option<MixerDeviceSink>>,
@@ -27,6 +27,7 @@ pub struct RodioEngine {
     status_sender: Arc<sync::watch::Sender<AudioEngineStatus>>,
     tap_reader_sender: Arc<sync::watch::Sender<Option<Arc<TapReader>>>>,
     cancellation_token: CancellationToken,
+    _session: tracing::span::Span,
 }
 
 impl RodioEngine {
@@ -39,6 +40,7 @@ impl RodioEngine {
             status_sender: Arc::new(sync::watch::channel(AudioEngineStatus::Default).0),
             tap_reader_sender: Arc::new(sync::watch::channel(None).0),
             cancellation_token: CancellationToken::new(),
+            _session: tracing::span!(Level::INFO, "rodio-engine"),
         }
     }
 
@@ -49,15 +51,20 @@ impl RodioEngine {
         Ok(WatchStream::new(receiver))
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn play_stream_with_equalizer(
         &self,
         streaming_reader: StreamingReader,
     ) -> Result<ArcEqualizerSource<Decoder<StreamingReader>>, AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("not initialized");
+                Err(AudioError::NotInitialized)
+            }
             Some(player) => {
                 let length = streaming_reader.length();
                 if length.is_none() {
+                    tracing::debug!("length required");
                     return Err(AudioError::LengthRequired);
                 }
                 let length = length.unwrap();
@@ -83,6 +90,7 @@ impl RodioEngine {
 }
 
 impl AudioEngine for RodioEngine {
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn init(&self) -> Result<(), AudioError> {
         let error_sender = self.error_sender.clone();
         let position_sender = self.position_sender.clone();
@@ -96,24 +104,33 @@ impl AudioEngine for RodioEngine {
                 .open_stream()
             })
             .or_else(|original_err| {
+                tracing::debug!(error = %original_err, "get default device error, trying fallback devices");
                 let devices = match cpal::default_host().output_devices() {
                     Ok(devices) => devices,
-                    Err(_) => {
+                    Err(e) => {
+                        tracing::debug!(error = %e, "enumerate output devices error");
                         return Err(original_err);
                     }
                 };
-                devices
+                let valid_devices: Vec<_> = devices
                     .filter(|dev| {
                         dev.description()
                             .map(|desc| desc.driver().is_some_and(|driver| driver != "null"))
                             .unwrap_or(false)
                     })
+                    .collect();
+                tracing::debug!(device_count = valid_devices.len(), "available non-null devices");
+                valid_devices
+                    .into_iter()
                     .find_map(|d| {
                         DeviceSinkBuilder::from_device(d)
                             .and_then(|x| x.open_sink_or_fallback())
                             .ok()
                     })
-                    .ok_or(original_err)
+                    .ok_or_else(|| {
+                        tracing::debug!("no fallback device succeeded");
+                        original_err
+                    })
             })?;
         let player = Arc::new(Player::connect_new(handle.mixer()));
         let cloned_player = player.clone();
@@ -164,9 +181,13 @@ impl AudioEngine for RodioEngine {
         Ok(WatchStream::new(receiver))
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn resume(&self) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("not initialized");
+                Err(AudioError::NotInitialized)
+            },
             Some(player) => {
                 player.play();
                 Ok(())
@@ -174,9 +195,13 @@ impl AudioEngine for RodioEngine {
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn pause(&self) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("not initialized");
+                Err(AudioError::NotInitialized)
+            },
             Some(player) => {
                 player.pause();
                 Ok(())
@@ -184,10 +209,15 @@ impl AudioEngine for RodioEngine {
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn seek(&self, position: Duration) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("not initialized");
+                Err(AudioError::NotInitialized)
+            },
             Some(player) => {
+                tracing::debug!(?position, "seek");
                 let _ = player.try_seek(position)?;
                 Ok(())
             }
@@ -201,19 +231,28 @@ impl AudioEngine for RodioEngine {
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn set_volume(&self, volume: f32) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("not initialized");
+                Err(AudioError::NotInitialized)
+            },
             Some(player) => {
+                tracing::debug!(?volume, "set volume");
                 player.set_volume(volume);
                 Ok(())
             }
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn play_cursor(&self, cursor: Cursor<Bytes>) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("not initialized");
+                Err(AudioError::NotInitialized)
+            },
             Some(player) => {
                 player.clear();
                 let source = Decoder::try_from(cursor)?;
@@ -226,12 +265,17 @@ impl AudioEngine for RodioEngine {
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn play_stream(&self, streaming_reader: StreamingReader) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("play stream failed: not initialized");
+                Err(AudioError::NotInitialized)
+            },
             Some(player) => {
                 let length = streaming_reader.length();
                 if length.is_none() {
+                    tracing::debug!("length required");
                     return Err(AudioError::LengthRequired);
                 }
                 let length = length.unwrap();
@@ -251,9 +295,13 @@ impl AudioEngine for RodioEngine {
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     fn reset(&self) -> Result<(), AudioError> {
         match self.player.read().as_ref() {
-            None => Err(AudioError::NotInitialized),
+            None => {
+                tracing::debug!("not initialized");
+                Err(AudioError::NotInitialized)
+            },
             Some(player) => {
                 player.clear();
                 Ok(())

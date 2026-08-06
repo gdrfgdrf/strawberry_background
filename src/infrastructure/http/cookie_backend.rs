@@ -7,25 +7,27 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::io;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock as AsyncRwLock;
 use tokio::time::timeout;
+use tracing::{Instrument, Level, span};
 
 pub struct FileBackedCookieStore {
     inner: AsyncRwLock<InnerStore>,
     config: CookieConfig,
     storage_path: Option<String>,
     dirty: std::sync::atomic::AtomicBool,
+    _session: span::Span,
 }
 
 struct InnerStore {
     cookies: HashMap<CookieKey, Cookie>,
     session_cookies: HashMap<CookieKey, Cookie>,
+    _session: span::Span,
 }
 
 #[async_trait]
 impl CookieStore for FileBackedCookieStore {
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn get(&self, key: &CookieKey) -> Option<Cookie> {
         let store = self.inner.read().await;
 
@@ -38,6 +40,7 @@ impl CookieStore for FileBackedCookieStore {
         store.session_cookies.get(key).cloned()
     }
 
+    #[tracing::instrument(skip(self, cookie), parent = &self._session)]
     async fn set(&self, cookie: Cookie) {
         let mut store = self.inner.write().await;
 
@@ -50,6 +53,7 @@ impl CookieStore for FileBackedCookieStore {
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn remove(&self, key: &CookieKey) {
         let mut store = self.inner.write().await;
         store.cookies.remove(key);
@@ -57,6 +61,7 @@ impl CookieStore for FileBackedCookieStore {
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn get_for_domain(&self, domain: &str) -> Vec<Cookie> {
         let store = self.inner.read().await;
 
@@ -81,6 +86,7 @@ impl CookieStore for FileBackedCookieStore {
         cookies
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn get_for_url(&self, url: &str) -> Vec<Cookie> {
         let domain = extract_domain(url);
         if domain.is_err() {
@@ -90,6 +96,7 @@ impl CookieStore for FileBackedCookieStore {
         self.get_for_domain(&domain.unwrap()).await
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn clear_all(&self) {
         let mut store = self.inner.write().await;
         store.cookies.clear();
@@ -97,43 +104,71 @@ impl CookieStore for FileBackedCookieStore {
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn persist(&self) -> Result<(), CookieError> {
         if let Some(path) = &self.storage_path {
+            tracing::debug!(path = ?path, "persisting");
+
             let store = self.inner.read().await;
             let serializable = SerializableStore {
                 cookies: store.cookies.values().cloned().collect(),
                 saved_at: SystemTime::now(),
             };
 
-            let json = serde_json::to_string_pretty(&serializable)
-                .map_err(|e| CookieError::Serialization(e.to_string()))?;
+            let json = serde_json::to_string_pretty(&serializable).map_err(|e| {
+                tracing::debug!(error = %e, "serialize store to json error");
+                CookieError::Serialization(e.to_string())
+            })?;
+            let content_bytes = json.into_bytes();
+            tracing::debug!(content_length = ?content_bytes.len(), "writing json");
             match timeout(
                 Duration::from_secs(60),
-                tokio::fs::write(path, json.into_bytes()),
+                tokio::fs::write(path, &content_bytes),
             )
             .await
             {
                 Ok(Ok(())) => Ok(()),
-                Ok(Err(e)) => Err(CookieError::IO(e.to_string())),
-                Err(e) => Err(CookieError::Timeout(e.to_string())),
+                Ok(Err(e)) => {
+                    tracing::debug!(error = %e, "async write error, downgrade to sync write");
+                    std::fs::write(path, &content_bytes).map_err(|e| {
+                        tracing::debug!(error = %e, "sync write error");
+                        CookieError::IO(e.to_string())
+                    })
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "async write timeout, downgrade to sync write");
+                    std::fs::write(path, &content_bytes).map_err(|e| {
+                        tracing::debug!(error = %e, "sync write error");
+                        CookieError::IO(e.to_string())
+                    })
+                }
             }
         } else {
             Ok(())
         }
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn load(&self) -> Result<(), CookieError> {
         if let Some(path) = &self.storage_path {
+            tracing::debug!(path = ?path, "loading cookies");
             if !std::path::Path::new(path).exists() {
+                tracing::debug!(path = ?path, "path not exists");
                 return Ok(());
             }
 
             let json = tokio::fs::read_to_string(path)
                 .await
-                .map_err(|e| CookieError::IO(e.to_string()))?;
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "read file error");
+                    CookieError::IO(e.to_string())
+                })?;
 
             let serializable: SerializableStore = serde_json::from_str(&json)
-                .map_err(|e| CookieError::Serialization(e.to_string()))?;
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "deserialize error");
+                    CookieError::Serialization(e.to_string())
+                })?;
 
             let now = SystemTime::now();
             let cookies: HashMap<_, _> = serializable
@@ -164,42 +199,63 @@ struct SerializableStore {
 
 impl FileBackedCookieStore {
     pub async fn new(config: CookieConfig) -> Result<Self, CookieError> {
+        let backend_session = span!(Level::INFO, "cookie-store");
+        let _ = backend_session.enter();
+        tracing::debug!(
+            cookie_path = ?config.cookie_path,
+            debounce_delay_ms = ?config.debounce_delay.as_millis(),
+            auto_save_interval_ms = ?config.auto_save_interval.map(|duration| duration.as_millis()),
+            "creating cookie store"
+        );
+
         let mut initial_cookies: HashMap<CookieKey, Cookie> = HashMap::new();
         if let Some(initials) = config.initial_cookies.clone() {
+            tracing::debug!(cookie_count = ?initials.len(), "inserting initial cookies");
             initials.into_iter().for_each(|cookie| {
                 let key = cookie.key.clone();
                 initial_cookies.insert(key, cookie);
             });
         }
 
+        let inner_session = span!(parent: &backend_session, Level::INFO, "inner-store");
         let store = Self {
             inner: AsyncRwLock::new(InnerStore {
                 cookies: initial_cookies,
                 session_cookies: HashMap::new(),
+                _session: inner_session,
             }),
             storage_path: config.cookie_path.clone(),
             config,
             dirty: std::sync::atomic::AtomicBool::new(false),
+            _session: backend_session,
         };
 
         store.load().await?;
         Ok(store)
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn start_auto_save(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         if let Some(interval) = self.config.auto_save_interval {
+            tracing::debug!(interval_ms = ?interval.as_millis(), "spawning auto save thread");
+
             let store = Arc::clone(&self);
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(interval);
-                loop {
-                    interval.tick().await;
-                    if store.dirty.load(std::sync::atomic::Ordering::SeqCst) {
-                        if let Err(e) = store.persist().await {
-                            eprintln!("Failed to auto-save cookies: {}", e);
+            tokio::spawn(
+                async move {
+                    let mut interval = tokio::time::interval(interval);
+                    loop {
+                        tracing::debug!("ticking");
+                        interval.tick().await;
+                        tracing::debug!("ticked");
+                        if store.dirty.load(std::sync::atomic::Ordering::SeqCst) {
+                            if let Err(e) = store.persist().await {
+                                eprintln!("Failed to auto-save cookies: {}", e);
+                            }
                         }
                     }
                 }
-            })
+                .in_current_span(),
+            )
         } else {
             tokio::spawn(async {})
         }

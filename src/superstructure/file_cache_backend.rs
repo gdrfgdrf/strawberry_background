@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::fs::{File, try_exists};
 use tokio::sync::{Mutex, RwLock};
+use tracing::{Level, span, Instrument};
 use uuid::Uuid;
 
 pub struct SingletonFileCacheManagerFactory<T>
@@ -24,6 +25,7 @@ where
     creator: T,
     storage_manager: Arc<dyn StorageManager>,
     single_store: SingleStore<SafeModeDatabase>,
+    _session: span::Span,
 }
 
 pub struct DefaultFileCacheManager {
@@ -36,6 +38,7 @@ pub struct DefaultFileCacheManager {
     map: DashMap<String, RwLock<CacheRecord>>,
     storage_manager: Arc<dyn StorageManager>,
     single_store: SingleStore<SafeModeDatabase>,
+    _session: span::Span,
 }
 
 impl<T> SingletonFileCacheManagerFactory<T>
@@ -47,6 +50,15 @@ where
         storage_manager: Arc<dyn StorageManager>,
         creator: T,
     ) -> Self {
+        let session = span!(Level::INFO, "file-cache-manager-factory");
+        let _ = session.enter();
+        tracing::debug!(
+            base_path = ?config.base_path,
+            auto_save_interval_ms = ?config.auto_save_interval.as_millis(),
+            channels = ?config.channels,
+            "creating file cache manager factory"
+        );
+
         let mut rkv_service = RKV_SERVICE.write().unwrap();
         let rkv_service = rkv_service.as_mut().unwrap();
         let store = rkv_service.init_db("file_cache").unwrap();
@@ -57,6 +69,7 @@ where
             creator,
             storage_manager,
             single_store: store,
+            _session: session,
         }
     }
 }
@@ -68,6 +81,15 @@ impl DefaultFileCacheManager {
         channel: CacheChannel,
         storage_manager: Arc<dyn StorageManager>,
     ) -> Self {
+        let session = span!(Level::INFO, "default-file-cache-manager");
+        let _ = session.enter();
+        tracing::debug!(
+            path = ?path,
+            auto_save_interval = ?auto_save_interval.as_millis(),
+            channel = ?channel,
+            "creating default file cache manager"
+        );
+
         let mut rkv_service = RKV_SERVICE.write().unwrap();
         let rkv_service = rkv_service.as_mut().unwrap();
         let store = rkv_service.init_db("file_cache").unwrap();
@@ -89,9 +111,10 @@ impl DefaultFileCacheManager {
             map,
             storage_manager,
             single_store: store,
+            _session: session,
         }
     }
-    
+
     fn build_path(&self, filename: &String) -> String {
         if self.extension.is_some() {
             return format!(
@@ -117,47 +140,69 @@ impl DefaultFileCacheManager {
         self.dirty.load(Ordering::SeqCst)
     }
 
-    async fn ensure_directory_exist(&self, directory: &String) -> Result<(), CacheError> {
+    #[tracing::instrument(skip(self), parent = &self._session)]
+    async fn ensure_directory_exists(&self, directory: &String) -> Result<(), CacheError> {
         if !try_exists(directory)
             .await
-            .map_err(|e| CacheError::IO(e.to_string()))?
+            .map_err(|e| {
+                tracing::debug!(error = %e, "checking directory if exists error");
+                CacheError::IO(e.to_string())
+            })?
         {
             return tokio::fs::create_dir_all(directory)
                 .await
-                .map_err(|e| CacheError::IO(e.to_string()));
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "create directory error");
+                    CacheError::IO(e.to_string())
+                });
         }
         Ok(())
     }
 
-    async fn ensure_file_exist(&self, filename: &String) -> Result<(), CacheError> {
+    #[tracing::instrument(skip(self), parent = &self._session)]
+    async fn ensure_file_exists(&self, filename: &String) -> Result<(), CacheError> {
         if !try_exists(filename)
             .await
-            .map_err(|e| CacheError::IO(e.to_string()))?
+            .map_err(|e| {
+                tracing::debug!(error = %e, "checking file if exists error");
+                CacheError::IO(e.to_string())
+            })?
         {
             let file = File::create_new(filename)
                 .await
-                .map_err(|e| CacheError::IO(e.to_string()))?;
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "create file error");
+                    CacheError::IO(e.to_string())
+                })?;
 
             file.sync_all()
                 .await
-                .map_err(|e| CacheError::IO(e.to_string()))?
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "sync filesystem error");
+                    CacheError::IO(e.to_string())
+                })?
         }
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     pub fn start_auto_save(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         let store = self.dirty.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(self.auto_save_interval);
+            tracing::debug!(interval = ?interval.period().as_millis(), "start ticking");
+            
             loop {
+                tracing::debug!("ticking");
                 interval.tick().await;
+                tracing::debug!("ticked");
                 if store.load(Ordering::SeqCst) {
                     if let Err(e) = self.persist().await {
                         eprintln!("Failed to auto-save cache channel: {}", e);
                     }
                 }
             }
-        })
+        }.in_current_span())
     }
 }
 
@@ -169,6 +214,7 @@ where
         + Sync
         + 'static,
 {
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn create_with_name(
         &self,
         name: String,
@@ -181,30 +227,21 @@ where
         self.create_with_channel(channel).await
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn create_channel(
         &self,
         name: String,
         extension: Option<String>,
     ) -> Result<CacheChannel, CacheError> {
-        // let channel_path = self.get_channel_path(&name);
-        // let exists = try_exists(&channel_path)
-        //     .await
-        //     .map_err(|e| CacheError::IO(e.to_string()))?;
-        // if !exists {
-        //     let channel = CacheChannel {
-        //         name,
-        //         extension,
-        //         records: Vec::new(),
-        //     };
-        //     return Ok(channel);
-        // }
-
         let rkv_service = RKV_SERVICE.read().unwrap();
         let rkv_service = rkv_service.as_ref().unwrap();
         let channel = rkv_service
             .read_rkyv_cache_channel_data(&self.single_store, &name)
-            .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
-        
+            .map_err(|e| {
+                tracing::debug!(error = %e, "read cache channel data error");
+                CacheError::ErrorForward(e.to_string())
+            })?;
+
         if channel.is_none() {
             let channel = CacheChannel {
                 name,
@@ -214,14 +251,10 @@ where
             return Ok(channel);
         }
 
-        // let read_file = ReadFile::path(channel_path);
-        // let data = self.storage_manager.read(read_file).await?;
-        // let channel = rkyv::from_bytes::<CacheChannel, Error>(&data)
-        //     .map_err(|e| CacheError::IO(e.to_string()))?;
-
         Ok(channel.unwrap())
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn create_with_channel(
         &self,
         channel: CacheChannel,
@@ -236,6 +269,7 @@ where
         Ok(manager)
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn get_with_name(&self, name: &String) -> Result<Arc<dyn FileCacheManager>, CacheError> {
         if !self.map.contains_key(name) {
             return Err(CacheError::ManagerNotExist(name.clone()));
@@ -247,6 +281,7 @@ where
 
 #[async_trait]
 impl FileCacheManager for DefaultFileCacheManager {
+    #[tracing::instrument(skip(self, bytes), parent = &self._session)]
     async fn cache(
         &self,
         tag: String,
@@ -254,14 +289,16 @@ impl FileCacheManager for DefaultFileCacheManager {
         bytes: &Vec<u8>,
     ) -> Result<(), CacheError> {
         if self.map.contains_key(&tag) {
+            tracing::debug!("tag is existing in map, overwriting");
+            
             let entry = self.map.get_mut(&tag).ok_or(CacheError::TagNotExist(tag))?;
             let mut record = entry
                 .try_write()
                 .map_err(|e| CacheError::Lock(e.to_string()))?;
 
             let path = self.build_path(&record.filename);
-            self.ensure_directory_exist(&self.path).await?;
-            self.ensure_file_exist(&path).await?;
+            self.ensure_directory_exists(&self.path).await?;
+            self.ensure_file_exists(&path).await?;
 
             let write_file = WriteFile {
                 path,
@@ -280,13 +317,16 @@ impl FileCacheManager for DefaultFileCacheManager {
                     record.size = bytes.len();
                     self.make_dirty();
                 })
-                .map_err(|e| CacheError::from(e));
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "write file error");
+                    CacheError::from(e)
+                });
         }
 
         let filename = Uuid::new_v4().to_string();
         let path = self.build_path(&filename);
-        self.ensure_directory_exist(&self.path).await?;
-        self.ensure_file_exist(&path).await?;
+        self.ensure_directory_exists(&self.path).await?;
+        self.ensure_file_exists(&path).await?;
 
         let write_file = WriteFile {
             path,
@@ -306,13 +346,17 @@ impl FileCacheManager for DefaultFileCacheManager {
                     size: bytes.len(),
                     sentence,
                 };
-                
+
                 self.map.insert(tag, RwLock::new(record));
                 self.make_dirty();
             })
-            .map_err(|e| CacheError::from(e))
+            .map_err(|e| {
+                tracing::debug!(error = %e, "write file error");
+                CacheError::from(e)
+            })
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn should_update(&self, tag: &String, sentence: &String) -> Result<bool, CacheError> {
         let entry = self
             .map
@@ -324,7 +368,10 @@ impl FileCacheManager for DefaultFileCacheManager {
         let filename = &record.filename;
         if !try_exists(self.build_path(filename))
             .await
-            .map_err(|e| CacheError::IO(e.to_string()))?
+            .map_err(|e| {
+                tracing::debug!(error = %e, "check if file exists error");
+                CacheError::IO(e.to_string())
+            })?
         {
             return Ok(true);
         }
@@ -332,6 +379,7 @@ impl FileCacheManager for DefaultFileCacheManager {
         Ok(record.sentence != *sentence)
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn fetch(&self, tag: &String) -> Result<Vec<u8>, CacheError> {
         let entry = self
             .map
@@ -345,7 +393,10 @@ impl FileCacheManager for DefaultFileCacheManager {
 
         if !try_exists(&path)
             .await
-            .map_err(|e| CacheError::IO(e.to_string()))?
+            .map_err(|e| {
+                tracing::debug!(error = %e, "check if file exists error");
+                CacheError::IO(e.to_string())
+            })?
         {
             return Err(CacheError::FileNotExist(path));
         }
@@ -354,34 +405,21 @@ impl FileCacheManager for DefaultFileCacheManager {
         self.storage_manager
             .read(read_file)
             .await
-            .map_err(|e| CacheError::from(e))
+            .map_err(|e| {
+                tracing::debug!(error = %e, "read file error");
+                CacheError::from(e)
+            })
     }
 
     async fn flush(&self, tag: &String) -> Result<(), CacheError> {
-        // if !self.map.contains_key(tag) {
-        //     return Err(CacheError::TagNotExist(tag.clone()));
-        // }
-        //
-        // let record = self.map.remove(tag).unwrap();
-        // self.make_dirty();
-        //
-        // let record = record.1.into_inner();
-        // let path = self.build_path(&record.filename);
-        //
-        // if try_exists(&path)
-        //     .await
-        //     .map_err(|e| CacheError::IO(e.to_string()))?
-        // {
-        //     return tokio::fs::remove_file(path)
-        //         .await
-        //         .map_err(|e| CacheError::IO(e.to_string()));
-        // }
-
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn persist(&self) -> Result<(), CacheError> {
-        if !self.is_dirty() {
+        let is_dirty = self.is_dirty();
+        tracing::debug!(is_dirty = ?is_dirty, "persisting");
+        if !is_dirty {
             return Ok(());
         }
 
@@ -404,34 +442,15 @@ impl FileCacheManager for DefaultFileCacheManager {
         let rkv_service = rkv_service.as_ref().unwrap();
         rkv_service
             .write_rkyv_cache_channel_data(&self.single_store, &self.name, &channel)
-            .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
+            .map_err(|e| {
+                tracing::debug!(error = %e, "writing channel datas error");
+                CacheError::ErrorForward(e.to_string())
+            })?;
         self.make_clean();
         Ok(())
-
-        // let bytes = rkyv::to_bytes::<Error>(&channel)
-        //     .map_err(|e| CacheError::Serialization(e.to_string()))?
-        //     .into_vec();
-        //
-        // let channel_path = self.get_channel_path();
-        // self.ensure_directory_exist(&self.path).await?;
-        // self.ensure_file_exist(&channel_path).await?;
-        //
-        // let write_file = WriteFile {
-        //     path: channel_path,
-        //     mode: WriteMode::Cover,
-        //     timeout: Duration::from_secs(60),
-        //     ensure_mode: Some(EnsureMode::SyncAll),
-        //     data: &bytes
-        // };
-        // self.storage_manager
-        //     .write(write_file)
-        //     .await
-        //     .map_err(|e| CacheError::from(e))
-        //     .inspect(|_| {
-        //         self.make_clean();
-        //     })
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn record(&self, tag: &String) -> Result<CacheRecord, CacheError> {
         let entry = self
             .map
@@ -444,6 +463,7 @@ impl FileCacheManager for DefaultFileCacheManager {
         Ok(record)
     }
 
+    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn path(&self, tag: &String) -> Result<String, CacheError> {
         let entry = self
             .map
@@ -457,7 +477,10 @@ impl FileCacheManager for DefaultFileCacheManager {
 
         if !try_exists(&path)
             .await
-            .map_err(|e| CacheError::IO(e.to_string()))?
+            .map_err(|e| {
+                tracing::debug!(error = %e, "check if file exists error");
+                CacheError::IO(e.to_string())
+            })?
         {
             return Err(CacheError::FileNotExist(path));
         }

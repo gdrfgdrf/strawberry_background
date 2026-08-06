@@ -17,6 +17,7 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tracing::{Level, span};
 
 fn send_monitor_event(
     monitor: Arc<dyn Monitor>,
@@ -47,6 +48,7 @@ pub struct ReqwestBackend {
     decryption_provider: Option<Arc<dyn DecryptionProvider>>,
     cookie_store: Option<Arc<dyn CookieStore>>,
     client: Client,
+    _session: tracing::span::Span,
 }
 
 impl ReqwestBackend {
@@ -62,6 +64,7 @@ impl ReqwestBackend {
             decryption_provider: None,
             cookie_store: None,
             client,
+            _session: span!(Level::INFO, "reqwest-backend"),
         })
     }
 
@@ -69,6 +72,17 @@ impl ReqwestBackend {
         config: HttpConfig,
         cookie_store: Option<Arc<dyn CookieStore>>,
     ) -> Result<Self, HttpClientError> {
+        let _session = span!(Level::INFO, "reqwest-backend");
+        let _ = _session.enter();
+
+        tracing::debug!(
+            pool_idle_timeout = ?config.pool_idle_timeout,
+            connect_timeout = ?config.connect_timeout,
+            request_timeout = ?config.request_timeout,
+            max_connections = config.max_connections_per_host,
+            "building HTTP client"
+        );
+
         let mut client = Client::builder()
             .pool_idle_timeout(config.pool_idle_timeout)
             .connect_timeout(config.connect_timeout)
@@ -79,9 +93,14 @@ impl ReqwestBackend {
             .pool_max_idle_per_host(config.max_connections_per_host);
 
         if let Some(all_proxy) = config.all_proxy {
+            tracing::debug!(proxy = %all_proxy, "setting global proxy");
             client = client.proxy(Proxy::all(all_proxy).unwrap());
         }
         if let Some(host_proxy) = config.host_proxy {
+            tracing::debug!(
+                host_count = host_proxy.len(),
+                "setting host-specific proxies"
+            );
             let proxy = Proxy::custom(move |url| {
                 let host_str = url.host_str()?;
                 for (host, proxy) in host_proxy.iter() {
@@ -100,15 +119,17 @@ impl ReqwestBackend {
             client = client.proxy(proxy);
         }
 
-        let client = client
-            .build()
-            .map_err(|e| HttpClientError::Network(e.to_string()))?;
+        let client = client.build().map_err(|e| {
+            tracing::debug!(error = %e, "build HTTP client error");
+            HttpClientError::Network(e.to_string())
+        })?;
 
         Ok(Self {
             encryption_provider: config.encryption_provider,
             decryption_provider: config.decryption_provider,
             cookie_store,
             client,
+            _session,
         })
     }
 
@@ -123,6 +144,7 @@ impl ReqwestBackend {
 }
 
 impl ReqwestBackend {
+    #[tracing::instrument(skip(self, request_builder), parent = &self._session)]
     async fn inject_cookies(
         &self,
         url: &str,
@@ -130,6 +152,7 @@ impl ReqwestBackend {
     ) -> Result<reqwest::RequestBuilder, HttpClientError> {
         let cookie_store = self.cookie_store.as_ref();
         if cookie_store.is_none() {
+            tracing::debug!("cookie store is not configured");
             return Err(HttpClientError::Configuration(
                 "Cookie Store is not configured".to_string(),
             ));
@@ -137,6 +160,7 @@ impl ReqwestBackend {
         let cookie_store = cookie_store.unwrap();
         let cookies = cookie_store.get_for_url(url).await;
         if cookies.is_empty() {
+            tracing::debug!("cookies is empty");
             return Ok(request_builder);
         }
 
@@ -148,15 +172,21 @@ impl ReqwestBackend {
 
         Ok(request_builder.header(
             reqwest::header::COOKIE,
-            reqwest::header::HeaderValue::from_str(&cookie_header)
-                .map_err(|e| HttpClientError::InvalidHeader(e.to_string()))?,
+            reqwest::header::HeaderValue::from_str(&cookie_header).map_err(|e| {
+                tracing::debug!(error = %e, "build cookie header value error");
+                HttpClientError::InvalidHeader(e.to_string())
+            })?,
         ))
     }
 
+    #[tracing::instrument(skip(self, response), parent = &self._session)]
     async fn extract_cookies(&self, response: &Response) -> Result<(), HttpClientError> {
+        tracing::debug!(url = %response.url(), "extracting cookies");
+
         if let Some(url) = response.url().host_str() {
             let cookie_store = self.cookie_store.as_ref();
             if cookie_store.is_none() {
+                tracing::debug!("extract cookies failed: cookie store is not configured");
                 return Err(HttpClientError::Configuration(
                     "Cookie Store is not configured".to_string(),
                 ));
@@ -200,11 +230,21 @@ impl ReqwestBackend {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, endpoint), parent = &self._session)]
     async fn do_execute(&self, endpoint: HttpEndpoint) -> Result<Response, HttpClientError> {
+        tracing::debug!(
+            domain = ?endpoint.domain,
+            path = ?endpoint.path,
+            requires_encryption = ?endpoint.requires_encryption,
+            requires_decryption = ?endpoint.requires_decryption,
+            "do execute HTTP"
+        );
+
         if endpoint.body.is_some()
             && endpoint.requires_encryption
             && self.encryption_provider.is_none()
         {
+            tracing::debug!("endpoint requires encryption but no encryption provider exists");
             return Err(HttpClientError::Configuration(
                 "no encryption provider".to_string(),
             ));
@@ -213,6 +253,7 @@ impl ReqwestBackend {
             && endpoint.requires_decryption
             && self.decryption_provider.is_none()
         {
+            tracing::debug!("endpoint requires decryption but no decryption provider exists");
             return Err(HttpClientError::Configuration(
                 "no decryption provider".to_string(),
             ));
@@ -224,6 +265,7 @@ impl ReqwestBackend {
 
         if endpoint.headers.is_some() {
             let headers = endpoint.headers.unwrap();
+            tracing::debug!(header_count = ?headers.len(), "configuring headers");
             for (key, value) in headers {
                 request_builder = request_builder.header(&key, value);
             }
@@ -231,11 +273,13 @@ impl ReqwestBackend {
 
         if endpoint.user_agent.is_some() {
             let user_agent = endpoint.user_agent.unwrap();
+            tracing::debug!(user_agent = ?user_agent, "configuring user_agent");
             request_builder = request_builder.header(reqwest::header::USER_AGENT, user_agent);
         }
 
         if endpoint.content_type.is_some() {
             let content_type = endpoint.content_type.unwrap();
+            tracing::debug!(content_type = ?content_type, "configuring content_type");
             request_builder = request_builder.header(reqwest::header::CONTENT_TYPE, content_type);
         }
 
@@ -259,8 +303,10 @@ impl ReqwestBackend {
             .map_err(|e| HttpClientError::Configuration(e.to_string()))?;
         let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
+                tracing::debug!(error = %e, "execute timeout");
                 HttpClientError::Timeout(endpoint.timeout)
             } else {
+                tracing::debug!(error = %e, "execute network error");
                 HttpClientError::Network(e.to_string())
             }
         })?;
@@ -291,7 +337,16 @@ impl HttpClient for ReqwestBackend {
         self.decryption_provider.take()
     }
 
+    #[tracing::instrument(skip(self, endpoint), parent = &self._session)]
     async fn execute(&self, endpoint: HttpEndpoint) -> Result<HttpResponse, HttpClientError> {
+        tracing::debug!(
+            domain = ?endpoint.domain,
+            path = ?endpoint.path,
+            requires_encryption = ?endpoint.requires_encryption,
+            requires_decryption = ?endpoint.requires_decryption,
+            "executing HTTP"
+        );
+
         let url = endpoint.build_url();
         let requires_decryption = endpoint.requires_decryption;
 
@@ -300,6 +355,7 @@ impl HttpClient for ReqwestBackend {
         });
 
         let response = self.do_execute(endpoint).await.inspect_err(|e| {
+            tracing::debug!(error = %e, "execute http error");
             monitoring(|monitor| send_monitor_event(monitor, &url, EventStage::Failed, None));
         })?;
         let status = response.status().as_u16();
@@ -312,10 +368,13 @@ impl HttpClient for ReqwestBackend {
         let mut body: Vec<u8>;
         let content_length = response.content_length();
         if content_length.is_some() {
+            tracing::debug!(content_length = ?content_length, "reading response stream");
+
             let stream = response.bytes_stream();
             let stream = stream
                 .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))
                 .inspect_err(|e| {
+                    tracing::debug!(error = %e, "read response stream error");
                     monitoring(|monitor| {
                         send_monitor_event(monitor, &url, EventStage::Failed, None)
                     });
@@ -344,6 +403,7 @@ impl HttpClient for ReqwestBackend {
                 .await
                 .map_err(|e| HttpClientError::Network(e.to_string()))
                 .inspect_err(|e| {
+                    tracing::debug!(error = %e, "copy response stream error");
                     monitoring(|monitor| {
                         send_monitor_event(monitor, &url, EventStage::Failed, None)
                     });
@@ -354,6 +414,7 @@ impl HttpClient for ReqwestBackend {
                 .await
                 .map_err(|e| HttpClientError::Network(e.to_string()))
                 .inspect_err(|e| {
+                    tracing::debug!(error = %e, "read response error");
                     monitoring(|monitor| {
                         send_monitor_event(monitor, &url, EventStage::Failed, None);
                     });
@@ -376,10 +437,19 @@ impl HttpClient for ReqwestBackend {
         })
     }
 
+    #[tracing::instrument(skip(self, endpoint), parent = &self._session)]
     async fn execute_stream(
         &self,
         endpoint: HttpEndpoint,
     ) -> Result<HttpStreamResponse, HttpClientError> {
+        tracing::debug!(
+            domain = ?endpoint.domain,
+            path = ?endpoint.path,
+            requires_encryption = ?endpoint.requires_encryption,
+            requires_decryption = ?endpoint.requires_decryption,
+            "executing HTTP"
+        );
+
         let url = endpoint.build_url();
 
         monitoring(|monitor| {
@@ -387,6 +457,7 @@ impl HttpClient for ReqwestBackend {
         });
 
         let response = self.do_execute(endpoint).await.inspect_err(|e| {
+            tracing::debug!(error = %e, "execute http error");
             monitoring(|monitor| {
                 send_monitor_event(monitor, &url, EventStage::Failed, None);
             });
@@ -403,6 +474,9 @@ impl HttpClient for ReqwestBackend {
         let stream = response
             .bytes_stream()
             .map_err(|e| HttpClientError::Network(e.to_string()))
+            .inspect_err(|e| {
+                tracing::debug!(error = %e, "read response stream error");
+            })
             .on_complete(move || {
                 monitoring(|monitor| {
                     send_monitor_event(monitor, &cloned_url, EventStage::Finished, None)
@@ -410,6 +484,7 @@ impl HttpClient for ReqwestBackend {
             });
 
         if content_length.is_some() {
+            tracing::debug!(content_length = ?content_length, "preparing response stream");
             let stream = stream.inspect_ok(move |data| {
                 let length = data.len() as u64;
                 monitoring(|monitor| {
