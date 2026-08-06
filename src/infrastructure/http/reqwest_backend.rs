@@ -87,7 +87,6 @@ impl ReqwestBackend {
             .pool_idle_timeout(config.pool_idle_timeout)
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
-            .connection_verbose(true)
             .tls_danger_accept_invalid_hostnames(config.tls_danger_accept_invalid_hostnames)
             .tls_danger_accept_invalid_certs(config.tls_danger_accept_invalid_certs)
             .pool_max_idle_per_host(config.max_connections_per_host);
@@ -152,7 +151,7 @@ impl ReqwestBackend {
     ) -> Result<reqwest::RequestBuilder, HttpClientError> {
         let cookie_store = self.cookie_store.as_ref();
         if cookie_store.is_none() {
-            tracing::debug!("cookie store is not configured");
+            tracing::error!("cookie store is not configured");
             return Err(HttpClientError::Configuration(
                 "Cookie Store is not configured".to_string(),
             ));
@@ -164,6 +163,7 @@ impl ReqwestBackend {
             return Ok(request_builder);
         }
 
+        tracing::debug!(cookie_count = %cookies.len(), "preparing cookie headers");
         let cookie_header: String = cookies
             .iter()
             .map(|c| format!("{}={}", c.key.name, c.value))
@@ -173,7 +173,7 @@ impl ReqwestBackend {
         Ok(request_builder.header(
             reqwest::header::COOKIE,
             reqwest::header::HeaderValue::from_str(&cookie_header).map_err(|e| {
-                tracing::debug!(error = %e, "build cookie header value error");
+                tracing::error!(error = %e, "build cookie header value error");
                 HttpClientError::InvalidHeader(e.to_string())
             })?,
         ))
@@ -186,7 +186,7 @@ impl ReqwestBackend {
         if let Some(url) = response.url().host_str() {
             let cookie_store = self.cookie_store.as_ref();
             if cookie_store.is_none() {
-                tracing::debug!("extract cookies failed: cookie store is not configured");
+                tracing::error!("extract cookies failed: cookie store is not configured");
                 return Err(HttpClientError::Configuration(
                     "Cookie Store is not configured".to_string(),
                 ));
@@ -244,7 +244,7 @@ impl ReqwestBackend {
             && endpoint.requires_encryption
             && self.encryption_provider.is_none()
         {
-            tracing::debug!("endpoint requires encryption but no encryption provider exists");
+            tracing::error!("endpoint requires encryption but no encryption provider exists");
             return Err(HttpClientError::Configuration(
                 "no encryption provider".to_string(),
             ));
@@ -253,7 +253,7 @@ impl ReqwestBackend {
             && endpoint.requires_decryption
             && self.decryption_provider.is_none()
         {
-            tracing::debug!("endpoint requires decryption but no decryption provider exists");
+            tracing::error!("endpoint requires decryption but no decryption provider exists");
             return Err(HttpClientError::Configuration(
                 "no decryption provider".to_string(),
             ));
@@ -303,10 +303,10 @@ impl ReqwestBackend {
             .map_err(|e| HttpClientError::Configuration(e.to_string()))?;
         let response = self.client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
-                tracing::debug!(error = %e, "execute timeout");
+                tracing::error!(error = %e, "execute timeout");
                 HttpClientError::Timeout(endpoint.timeout)
             } else {
-                tracing::debug!(error = %e, "execute network error");
+                tracing::error!(error = %e, "execute network error");
                 HttpClientError::Network(e.to_string())
             }
         })?;
@@ -355,7 +355,7 @@ impl HttpClient for ReqwestBackend {
         });
 
         let response = self.do_execute(endpoint).await.inspect_err(|e| {
-            tracing::debug!(error = %e, "execute http error");
+            tracing::error!(error = %e, "execute http error");
             monitoring(|monitor| send_monitor_event(monitor, &url, EventStage::Failed, None));
         })?;
         let status = response.status().as_u16();
@@ -368,13 +368,13 @@ impl HttpClient for ReqwestBackend {
         let mut body: Vec<u8>;
         let content_length = response.content_length();
         if content_length.is_some() {
-            tracing::debug!(content_length = ?content_length, "reading response stream");
+            tracing::info!(content_length = ?content_length, "reading response stream");
 
             let stream = response.bytes_stream();
             let stream = stream
                 .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))
                 .inspect_err(|e| {
-                    tracing::debug!(error = %e, "read response stream error");
+                    tracing::error!(error = %e, "read response stream error");
                     monitoring(|monitor| {
                         send_monitor_event(monitor, &url, EventStage::Failed, None)
                     });
@@ -403,7 +403,7 @@ impl HttpClient for ReqwestBackend {
                 .await
                 .map_err(|e| HttpClientError::Network(e.to_string()))
                 .inspect_err(|e| {
-                    tracing::debug!(error = %e, "copy response stream error");
+                    tracing::error!(error = %e, "copy response stream error");
                     monitoring(|monitor| {
                         send_monitor_event(monitor, &url, EventStage::Failed, None)
                     });
@@ -414,7 +414,7 @@ impl HttpClient for ReqwestBackend {
                 .await
                 .map_err(|e| HttpClientError::Network(e.to_string()))
                 .inspect_err(|e| {
-                    tracing::debug!(error = %e, "read response error");
+                    tracing::error!(error = %e, "read response error");
                     monitoring(|monitor| {
                         send_monitor_event(monitor, &url, EventStage::Failed, None);
                     });
@@ -457,7 +457,7 @@ impl HttpClient for ReqwestBackend {
         });
 
         let response = self.do_execute(endpoint).await.inspect_err(|e| {
-            tracing::debug!(error = %e, "execute http error");
+            tracing::error!(error = %e, "execute http error");
             monitoring(|monitor| {
                 send_monitor_event(monitor, &url, EventStage::Failed, None);
             });
@@ -475,7 +475,7 @@ impl HttpClient for ReqwestBackend {
             .bytes_stream()
             .map_err(|e| HttpClientError::Network(e.to_string()))
             .inspect_err(|e| {
-                tracing::debug!(error = %e, "read response stream error");
+                tracing::error!(error = %e, "read response stream error");
             })
             .on_complete(move || {
                 monitoring(|monitor| {

@@ -73,7 +73,7 @@ impl RkvService {
     ) -> Result<(), Box<dyn Error>> {
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(data)
             .map_err(|e| {
-                tracing::debug!(error = %e, "rkyv serialization error");
+                tracing::error!(error = %e, "rkyv serialization error");
                 format!("rkyv serialization failed: {}", e)
             })?;
 

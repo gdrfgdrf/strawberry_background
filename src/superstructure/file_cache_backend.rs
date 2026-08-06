@@ -144,14 +144,14 @@ impl DefaultFileCacheManager {
         if !try_exists(directory)
             .await
             .map_err(|e| {
-                tracing::debug!(error = %e, "checking directory if exists error");
+                tracing::error!(error = %e, "checking directory if exists error");
                 CacheError::IO(e.to_string())
             })?
         {
             return tokio::fs::create_dir_all(directory)
                 .await
                 .map_err(|e| {
-                    tracing::debug!(error = %e, "create directory error");
+                    tracing::error!(error = %e, "create directory error");
                     CacheError::IO(e.to_string())
                 });
         }
@@ -163,21 +163,21 @@ impl DefaultFileCacheManager {
         if !try_exists(filename)
             .await
             .map_err(|e| {
-                tracing::debug!(error = %e, "checking file if exists error");
+                tracing::error!(error = %e, "checking file if exists error");
                 CacheError::IO(e.to_string())
             })?
         {
             let file = File::create_new(filename)
                 .await
                 .map_err(|e| {
-                    tracing::debug!(error = %e, "create file error");
+                    tracing::error!(error = %e, "create file error");
                     CacheError::IO(e.to_string())
                 })?;
 
             file.sync_all()
                 .await
                 .map_err(|e| {
-                    tracing::debug!(error = %e, "sync filesystem error");
+                    tracing::error!(error = %e, "sync filesystem error");
                     CacheError::IO(e.to_string())
                 })?
         }
@@ -192,12 +192,10 @@ impl DefaultFileCacheManager {
             tracing::debug!(interval = ?interval.period().as_millis(), "start ticking");
             
             loop {
-                tracing::debug!("ticking");
                 interval.tick().await;
-                tracing::debug!("ticked");
                 if store.load(Ordering::SeqCst) {
                     if let Err(e) = self.persist().await {
-                        eprintln!("Failed to auto-save cache channel: {}", e);
+                        tracing::error!(error = %e, "Failed to auto-save cache channel");
                     }
                 }
             }
@@ -237,7 +235,7 @@ where
         let channel = rkv_service
             .read_rkyv_cache_channel_data(&self.single_store, &name)
             .map_err(|e| {
-                tracing::debug!(error = %e, "read cache channel data error");
+                tracing::error!(error = %e, "read cache channel data error");
                 CacheError::ErrorForward(e.to_string())
             })?;
 
@@ -317,7 +315,7 @@ impl FileCacheManager for DefaultFileCacheManager {
                     self.make_dirty();
                 })
                 .map_err(|e| {
-                    tracing::debug!(error = %e, "write file error");
+                    tracing::error!(error = %e, "write file error");
                     CacheError::from(e)
                 });
         }
@@ -350,7 +348,7 @@ impl FileCacheManager for DefaultFileCacheManager {
                 self.make_dirty();
             })
             .map_err(|e| {
-                tracing::debug!(error = %e, "write file error");
+                tracing::error!(error = %e, "write file error");
                 CacheError::from(e)
             })
     }
@@ -368,7 +366,7 @@ impl FileCacheManager for DefaultFileCacheManager {
         if !try_exists(self.build_path(filename))
             .await
             .map_err(|e| {
-                tracing::debug!(error = %e, "check if file exists error");
+                tracing::error!(error = %e, "check if file exists error");
                 CacheError::IO(e.to_string())
             })?
         {
@@ -393,7 +391,7 @@ impl FileCacheManager for DefaultFileCacheManager {
         if !try_exists(&path)
             .await
             .map_err(|e| {
-                tracing::debug!(error = %e, "check if file exists error");
+                tracing::error!(error = %e, "check if file exists error");
                 CacheError::IO(e.to_string())
             })?
         {
@@ -405,7 +403,7 @@ impl FileCacheManager for DefaultFileCacheManager {
             .read(read_file)
             .await
             .map_err(|e| {
-                tracing::debug!(error = %e, "read file error");
+                tracing::error!(error = %e, "read file error");
                 CacheError::from(e)
             })
     }
@@ -442,7 +440,7 @@ impl FileCacheManager for DefaultFileCacheManager {
         rkv_service
             .write_rkyv_cache_channel_data(&self.single_store, &self.name, &channel)
             .map_err(|e| {
-                tracing::debug!(error = %e, "writing channel datas error");
+                tracing::error!(error = %e, "writing channel datas error");
                 CacheError::ErrorForward(e.to_string())
             })?;
         self.make_clean();
@@ -477,7 +475,7 @@ impl FileCacheManager for DefaultFileCacheManager {
         if !try_exists(&path)
             .await
             .map_err(|e| {
-                tracing::debug!(error = %e, "check if file exists error");
+                tracing::error!(error = %e, "check if file exists error");
                 CacheError::IO(e.to_string())
             })?
         {

@@ -68,7 +68,7 @@ impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
         sample_size: Option<u32>,
     ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
         if self.disposed.load(Ordering::Acquire) {
-            tracing::debug!("recorder has been disposed");
+            tracing::error!("recorder has been disposed");
             return Err(AudioError::RecorderDisposed);
         }
 
@@ -92,7 +92,7 @@ impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
                 })
             }
             _ => {
-                tracing::debug!(state = ?*guard, "recorder not idle");
+                tracing::error!(state = ?*guard, "recorder not idle");
                 Err(AudioError::AlreadyRecording)
             },
         }
@@ -145,7 +145,7 @@ impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
                 Ok(())
             }
             _ => {
-                tracing::debug!("not recording");
+                tracing::error!("not recording");
                 Err(AudioError::NotRecording)
             }
         }
@@ -346,7 +346,7 @@ impl AudioRecorderBackend for DesktopAudioRecorderBackend {
     ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
         let mut recorder = self.recoder.write();
         if recorder.is_none() {
-            tracing::debug!("not initialized");
+            tracing::error!("not initialized");
             return Err(AudioError::NotInitialized);
         }
         let recorder = recorder.as_mut().unwrap();

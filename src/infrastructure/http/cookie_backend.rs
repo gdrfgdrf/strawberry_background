@@ -116,7 +116,7 @@ impl CookieStore for FileBackedCookieStore {
             };
 
             let json = serde_json::to_string_pretty(&serializable).map_err(|e| {
-                tracing::debug!(error = %e, "serialize store to json error");
+                tracing::error!(error = %e, "serialize store to json error");
                 CookieError::Serialization(e.to_string())
             })?;
             let content_bytes = json.into_bytes();
@@ -129,16 +129,16 @@ impl CookieStore for FileBackedCookieStore {
             {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(e)) => {
-                    tracing::debug!(error = %e, "async write error, downgrade to sync write");
+                    tracing::error!(error = %e, "async write error, downgrade to sync write");
                     std::fs::write(path, &content_bytes).map_err(|e| {
-                        tracing::debug!(error = %e, "sync write error");
+                        tracing::error!(error = %e, "sync write error");
                         CookieError::IO(e.to_string())
                     })
                 }
                 Err(e) => {
-                    tracing::debug!(error = %e, "async write timeout, downgrade to sync write");
+                    tracing::error!(error = %e, "async write timeout, downgrade to sync write");
                     std::fs::write(path, &content_bytes).map_err(|e| {
-                        tracing::debug!(error = %e, "sync write error");
+                        tracing::error!(error = %e, "sync write error");
                         CookieError::IO(e.to_string())
                     })
                 }
@@ -160,13 +160,13 @@ impl CookieStore for FileBackedCookieStore {
             let json = tokio::fs::read_to_string(path)
                 .await
                 .map_err(|e| {
-                    tracing::debug!(error = %e, "read file error");
+                    tracing::error!(error = %e, "read file error");
                     CookieError::IO(e.to_string())
                 })?;
 
             let serializable: SerializableStore = serde_json::from_str(&json)
                 .map_err(|e| {
-                    tracing::debug!(error = %e, "deserialize error");
+                    tracing::error!(error = %e, "deserialize error");
                     CookieError::Serialization(e.to_string())
                 })?;
 
@@ -244,12 +244,10 @@ impl FileBackedCookieStore {
                 async move {
                     let mut interval = tokio::time::interval(interval);
                     loop {
-                        tracing::debug!("ticking");
                         interval.tick().await;
-                        tracing::debug!("ticked");
                         if store.dirty.load(std::sync::atomic::Ordering::SeqCst) {
                             if let Err(e) = store.persist().await {
-                                eprintln!("Failed to auto-save cookies: {}", e);
+                                tracing::error!(error = %e, "Failed to auto-save cookies");
                             }
                         }
                     }

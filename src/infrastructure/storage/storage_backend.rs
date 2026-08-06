@@ -69,7 +69,7 @@ impl StorageManager for AsyncStorageManager {
     async fn read(&self, request: ReadFile) -> Result<Vec<u8>, StorageError> {
         let path = request.path;
         let exists = try_exists(&path).await.map_err(|e| {
-            tracing::debug!(error = %e, "check if file exists error");
+            tracing::error!(error = %e, "check if file exists error");
             StorageError::IOError(e.to_string())
         })?;
 
@@ -89,11 +89,11 @@ impl StorageManager for AsyncStorageManager {
                 match timeout(request.timeout, read(path.clone())).await {
                     Ok(Ok(data)) => Ok(data),
                     Ok(Err(e)) => {
-                        tracing::debug!(error = %e, "read file error");
+                        tracing::error!(error = %e, "read file error");
                         Err(StorageError::IOError(e.to_string()))
                     }
                     Err(timeout) => {
-                        tracing::debug!(error = %timeout, "read file timeout");
+                        tracing::error!(error = %timeout, "read file timeout");
                         Err(StorageError::Timeout(timeout.to_string()))
                     }
                 }
@@ -106,7 +106,7 @@ impl StorageManager for AsyncStorageManager {
                 })
             })
             .inspect_err(|e| {
-                tracing::debug!(error = %e, "read file error");
+                tracing::error!(error = %e, "read file error");
                 monitoring(|monitor| {
                     send_monitor_event(monitor, &path, EventStage::Failed, None);
                 })
@@ -139,7 +139,7 @@ impl StorageManager for AsyncStorageManager {
                     .open(path.clone())
                     .await
                     .map_err(|e| {
-                        tracing::debug!(error = %e, "open file error");
+                        tracing::error!(error = %e, "open file error");
                         StorageError::IOError(e.to_string())
                     })?;
 
@@ -161,11 +161,11 @@ impl StorageManager for AsyncStorageManager {
                         Ok(())
                     }
                     Ok(Err(e)) => {
-                        tracing::debug!(error = %e, "write file error");
+                        tracing::error!(error = %e, "write file error");
                         Err(StorageError::IOError(e.to_string()))
                     },
                     Err(timeout) => {
-                        tracing::debug!(error = %timeout, "write file timeout");
+                        tracing::error!(error = %timeout, "write file timeout");
                         Err(StorageError::Timeout(timeout.to_string()))
                     },
                 };
@@ -178,7 +178,7 @@ impl StorageManager for AsyncStorageManager {
                 })
             })
             .inspect_err(|e| {
-                tracing::debug!(error = %e, "write file error");
+                tracing::error!(error = %e, "write file error");
                 monitoring(|monitor| {
                     send_monitor_event(monitor, &path, EventStage::Failed, None);
                 })
