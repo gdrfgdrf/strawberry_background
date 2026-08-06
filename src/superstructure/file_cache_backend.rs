@@ -254,7 +254,7 @@ where
         Ok(channel.unwrap())
     }
 
-    #[tracing::instrument(skip(self), parent = &self._session)]
+    #[tracing::instrument(skip(self, channel), parent = &self._session)]
     async fn create_with_channel(
         &self,
         channel: CacheChannel,
