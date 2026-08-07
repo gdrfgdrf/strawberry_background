@@ -12,14 +12,14 @@ pub trait AsyncFileOperator {
         write_mode: WriteMode,
         ensure_mode: Option<EnsureMode>,
     ) -> Result<(), CacheError>;
-    async fn read(&self, path: &String) -> Result<Bytes, CacheError>;
+    async fn read(&self, path: &String) -> Result<Vec<u8>, CacheError>;
     async fn flush_single(&self, path: &String, timeout: Duration) -> Result<(), CacheError>;
 }
 
 pub trait AsyncFileCacheManager {
     async fn cache(&self, tag: String, sentence: String, bytes: Bytes) -> Result<(), CacheError>;
     async fn should_update(&self, tag: &String, new_sentence: &String) -> Result<bool, CacheError>;
-    async fn fetch(&self, tag: &String) -> Result<Bytes, CacheError>;
+    async fn fetch(&self, tag: &String) -> Result<Vec<u8>, CacheError>;
     async fn persist(&self) -> Result<(), CacheError>;
 
     async fn record(&self, tag: &String) -> Result<CacheRecordsModel, CacheError>;

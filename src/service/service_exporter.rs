@@ -88,20 +88,6 @@ mod tests {
                     auto_save_interval: Some(Duration::from_secs(60)),
                     initial_cookies: None,
                 }),
-                file_cache_config: Some(FileCacheConfig {
-                    base_path: "file_cache_test".to_string(),
-                    auto_save_interval: Duration::from_secs(10),
-                    channels: Some(vec![
-                        FileCacheChannelConfig {
-                            name: "test-channel-1".to_string(),
-                            extension: None,
-                        },
-                        FileCacheChannelConfig {
-                            name: "test-channel-2".to_string(),
-                            extension: Some("extension".to_string()),
-                        },
-                    ]),
-                }),
             },
             Arc::new(runtime),
         )

@@ -6,7 +6,8 @@ use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, TransactionTrait,
 };
-use sea_orm::{Iterable, TryIntoModel};
+use sea_orm::Iterable;
+use std::collections::HashMap;
 
 pub struct CacheService {}
 
@@ -39,17 +40,29 @@ impl CacheService {
         Ok(channel)
     }
 
-    pub async fn find_channels_by_names(names: Vec<String>) -> Result<Option<Vec<CacheChannelsModel>>, DatabaseError> {
+    pub async fn find_channels_by_names(
+        names: Vec<String>,
+    ) -> Result<Option<Vec<Option<CacheChannelsModel>>>, DatabaseError> {
         let db = DB.read();
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
         let db = db.as_ref().unwrap();
+
         let channels = CacheChannels::find()
             .filter(CacheChannelsColumn::Name.is_in(&names))
             .all(db)
             .await?;
-        Ok(Some(channels))
+        let map = channels
+            .into_iter()
+            .map(|channel| (channel.name.clone(), channel))
+            .collect::<HashMap<String, CacheChannelsModel>>();
+        let ordered = names
+            .into_iter()
+            .map(|name| map.get(&name).cloned())
+            .collect::<Vec<Option<CacheChannelsModel>>>();
+
+        Ok(Some(ordered))
     }
 
     pub async fn find_records_by_channel_id(
@@ -82,6 +95,26 @@ impl CacheService {
         let db = db.as_ref().unwrap();
         let transaction = db.begin().await?;
         CacheChannels::insert(active_model)
+            .on_conflict(
+                OnConflict::columns(["id", "name"])
+                    .update_columns(all_columns!(CacheChannelsColumn))
+                    .to_owned(),
+            )
+            .exec_without_returning(&transaction)
+            .await?;
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    pub async fn insert_channels(active_models: Vec<CacheChannelsActiveModel>) -> Result<(), DatabaseError> {
+        let db = DB.read();
+        if db.is_none() {
+            return Err(DatabaseError::NotInitialized);
+        }
+        let db = db.as_ref().unwrap();
+        let transaction = db.begin().await?;
+        CacheChannels::insert_many(active_models)
             .on_conflict(
                 OnConflict::columns(["id", "name"])
                     .update_columns(all_columns!(CacheChannelsColumn))

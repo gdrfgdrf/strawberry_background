@@ -1,4 +1,6 @@
-use crate::db::models::preclude::{CacheChannelsModel, CacheRecordsActiveModel, CacheRecordsModel};
+use crate::db::models::preclude::{
+    CacheChannelsActiveModel, CacheChannelsModel, CacheRecordsActiveModel, CacheRecordsModel,
+};
 use crate::db::services::cache_services::CacheService;
 use crate::domain::models::file_cache_models::CacheError;
 use crate::domain::models::storage_models::{EnsureMode, WriteMode};
@@ -8,7 +10,7 @@ use bytes::Bytes;
 use parking_lot::{Mutex, RwLock};
 use sea_orm::{ActiveValue, IntoActiveModel};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::OpenOptions;
@@ -61,13 +63,66 @@ impl FileCacheCoordinator<DefaultAsyncFileCacheManager> {
     pub async fn new(
         tokio_runtime: Arc<Runtime>,
         base_path: String,
-        channel_names: Vec<String>,
+        channel_name2extension: Vec<(String, Option<String>)>,
     ) -> Result<Self, CacheError> {
+        let channel_names = channel_name2extension
+            .iter()
+            .map(|pair| pair.0.clone())
+            .collect::<Vec<String>>();
         let channels = CacheService::find_channels_by_names(channel_names.clone()).await?;
         if channels.is_none() {
             return Err(CacheError::ChannelNotExists(channel_names.join(", ")));
         }
-        let channels = channels.unwrap();
+        let mut channels = channels.unwrap();
+        let mut pending_channels = Vec::<CacheChannelsActiveModel>::new();
+        for (index, channel) in channels.iter_mut().enumerate() {
+            if channel.is_some() {
+                continue;
+            }
+            let pair = channel_name2extension.get(index);
+            if pair.is_none() {
+                continue;
+            }
+            let pair = pair.unwrap();
+            let name = pair.0.clone();
+            let extension = pair.1.clone();
+            let active_model = CacheChannelsActiveModel {
+                id: ActiveValue::NotSet,
+                name: ActiveValue::Set(name),
+                extension: ActiveValue::Set(extension),
+            };
+            pending_channels.push(active_model);
+        }
+        let names = pending_channels
+            .iter()
+            .map(|pending_channel| pending_channel.name.clone().unwrap())
+            .collect::<Vec<String>>();
+        CacheService::insert_channels(pending_channels).await?;
+        let mut pending_channels = VecDeque::from(
+            CacheService::find_channels_by_names(names)
+                .await?
+                .unwrap_or(Vec::new())
+                .into_iter()
+                .map(|pending_channel| pending_channel.unwrap())
+                .collect::<Vec<CacheChannelsModel>>(),
+        );
+
+        for channel in channels.iter_mut() {
+            if channel.is_some() {
+                continue;
+            }
+            let pending_channel = pending_channels.pop_front();
+            if pending_channel.is_none() {
+                continue;
+            }
+            let pending_channel = pending_channel.unwrap();
+            *channel = Some(pending_channel);
+        }
+
+        let channels = channels
+            .into_iter()
+            .map(|channel| channel.unwrap())
+            .collect::<Vec<CacheChannelsModel>>();
         let mut managers = HashMap::<String, Arc<DefaultAsyncFileCacheManager>>::new();
         for channel in channels {
             let name = channel.name.clone();
@@ -170,9 +225,8 @@ impl DefaultAsyncFileOperator {
         }
     }
 
-    async fn read_file(path: &String) -> Result<Bytes, CacheError> {
-        let result = tokio::fs::read(path).await?;
-        let bytes = Bytes::from(result);
+    async fn read_file(path: &String) -> Result<Vec<u8>, CacheError> {
+        let bytes = tokio::fs::read(path).await?;
         Ok(bytes)
     }
 
@@ -298,7 +352,7 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
         Ok(false)
     }
 
-    async fn fetch(&self, tag: &String) -> Result<Bytes, CacheError> {
+    async fn fetch(&self, tag: &String) -> Result<Vec<u8>, CacheError> {
         let records = self.records.read();
         if !records.contains_key(tag) {
             return Err(CacheError::RecordNotExists(tag.clone()));
@@ -360,7 +414,7 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
         Ok(())
     }
 
-    async fn read(&self, path: &String) -> Result<Bytes, CacheError> {
+    async fn read(&self, path: &String) -> Result<Vec<u8>, CacheError> {
         let stash = self.stash.read();
         let request = stash.get(path);
         if request.is_none() {
@@ -371,7 +425,7 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
             return Self::read_file(path).await;
         }
         let request = request.unwrap();
-        Ok(request.bytes.clone())
+        Ok(request.bytes.clone().to_vec())
     }
 
     async fn flush_single(&self, path: &String, duration: Duration) -> Result<(), CacheError> {

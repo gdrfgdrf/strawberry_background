@@ -3,7 +3,7 @@ use std::time::Duration;
 use cpal::Data;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
-use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr};
+use sea_orm::{ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr, EntityTrait};
 use sea_orm_migration::MigratorTrait;
 use crate::db::migration::migrator::Migrator;
 

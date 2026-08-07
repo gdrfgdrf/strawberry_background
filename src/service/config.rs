@@ -6,7 +6,6 @@ use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider}
 pub struct RuntimeConfig {
     pub http: Option<HttpConfig>,
     pub cookie: Option<CookieConfig>,
-    pub file_cache_config: Option<FileCacheConfig>
 }
 
 pub struct HttpConfig {
@@ -49,7 +48,6 @@ impl Default for RuntimeConfig {
         Self {
             http: None,
             cookie: None,
-            file_cache_config: None
         }
     }
 }
