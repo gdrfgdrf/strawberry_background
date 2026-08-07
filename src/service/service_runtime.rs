@@ -1,22 +1,16 @@
-use crate::domain::models::file_cache_models::CacheError;
 use crate::domain::models::http_models::{
     HttpClientError, HttpEndpoint, HttpResponse, HttpStreamResponse,
 };
 use crate::domain::models::storage_models::{ReadFile, StorageError, WriteFile};
 use crate::domain::traits::cookie_traits::CookieStore;
-use crate::domain::traits::file_cache_traits::FileCacheManagerFactory;
 use crate::domain::traits::http_traits::HttpClient;
 use crate::domain::traits::storage_traits::StorageManager;
 use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::infrastructure::storage::storage_backend::AsyncStorageManager;
 use crate::service::config::{
-    CookieConfig, FileCacheConfig, HttpConfig, RuntimeConfig,
+    CookieConfig, HttpConfig, RuntimeConfig,
 };
-use crate::superstructure::file_cache_backend::{
-    DefaultFileCacheManager, SingletonFileCacheManagerFactory,
-};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
@@ -44,7 +38,6 @@ pub struct ServiceRuntime {
     pub http_client: Option<Arc<dyn HttpClient>>,
     pub cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>>,
     pub storage_manager: Option<Arc<dyn StorageManager>>,
-    pub file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>>,
 }
 
 impl ServiceRuntime {
@@ -81,25 +74,12 @@ impl ServiceRuntime {
         };
 
         let storage_manager = Self::create_storage_manager()?;
-        let file_cache_manager_factory = Self::initialize_file_cache(
-            &tokio_runtime,
-            config.file_cache_config,
-            storage_manager.clone(),
-        );
-        let optional_file_cache_manager_factory: Option<Arc<dyn FileCacheManagerFactory>>;
-        if file_cache_manager_factory.is_ok() {
-            optional_file_cache_manager_factory = Some(file_cache_manager_factory?);
-        } else {
-            println!("{}", file_cache_manager_factory.err().unwrap());
-            optional_file_cache_manager_factory = None;
-        }
 
         Ok(Arc::new(Self {
             tokio_runtime,
             http_client,
             cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
-            file_cache_manager_factory: optional_file_cache_manager_factory,
         }))
     }
 
@@ -178,132 +158,8 @@ impl ServiceRuntime {
         Ok(storage_manager.write(write_file).await)
     }
 
-    pub async fn file_cache_cache(
-        &self,
-        channel: &String,
-        tag: String,
-        sentence: String,
-        bytes: &Vec<u8>,
-    ) -> Result<Result<(), CacheError>, ServiceError> {
-        if self.file_cache_manager_factory.is_none() {
-            return Err(ServiceError::NotConfigured("File Cache".to_string()));
-        }
-
-        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
-        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
-        if cache_manager.is_err() {
-            return Ok(cache_manager.map(|_| ()));
-        }
-        let cache_manager = cache_manager.unwrap();
-        Ok(cache_manager.cache(tag, sentence, bytes).await)
-    }
-
-    pub async fn file_cache_should_update(
-        &self,
-        channel: &String,
-        tag: &String,
-        sentence: &String,
-    ) -> Result<Result<bool, CacheError>, ServiceError> {
-        if self.file_cache_manager_factory.is_none() {
-            return Err(ServiceError::NotConfigured("File Cache".to_string()));
-        }
-
-        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
-        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
-        if cache_manager.is_err() {
-            return Ok(cache_manager.map(|_| false));
-        }
-        let cache_manager = cache_manager.unwrap();
-        Ok(cache_manager.should_update(tag, sentence).await)
-    }
-
-    pub async fn file_cache_fetch(
-        &self,
-        channel: &String,
-        tag: &String,
-    ) -> Result<Result<Vec<u8>, CacheError>, ServiceError> {
-        if self.file_cache_manager_factory.is_none() {
-            return Err(ServiceError::NotConfigured("File Cache".to_string()));
-        }
-
-        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
-        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
-        if cache_manager.is_err() {
-            return Ok(cache_manager.map(|_| vec![]));
-        }
-        let cache_manager = cache_manager.unwrap();
-        Ok(cache_manager.fetch(tag).await)
-    }
-
-    pub async fn file_cache_flush(
-        &self,
-        channel: &String,
-        tag: &String,
-    ) -> Result<Result<(), CacheError>, ServiceError> {
-        if self.file_cache_manager_factory.is_none() {
-            return Err(ServiceError::NotConfigured("File Cache".to_string()));
-        }
-
-        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
-        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
-        if cache_manager.is_err() {
-            return Ok(cache_manager.map(|_| ()));
-        }
-        let cache_manager = cache_manager.unwrap();
-        Ok(cache_manager.flush(tag).await)
-    }
-
-    pub async fn file_cache_persist(
-        &self,
-        channel: &String,
-    ) -> Result<Result<(), CacheError>, ServiceError> {
-        if self.file_cache_manager_factory.is_none() {
-            return Err(ServiceError::NotConfigured("File Cache".to_string()));
-        }
-
-        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
-        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
-        if cache_manager.is_err() {
-            return Ok(cache_manager.map(|_| ()));
-        }
-        let cache_manager = cache_manager.unwrap();
-        Ok(cache_manager.persist().await)
-    }
-
-    pub async fn file_cache_path(
-        &self,
-        channel: &String,
-        tag: &String,
-    ) -> Result<Result<String, CacheError>, ServiceError> {
-        if self.file_cache_manager_factory.is_none() {
-            return Err(ServiceError::NotConfigured("File Cache".to_string()));
-        }
-
-        let file_cache_manager_factory = self.file_cache_manager_factory.as_ref().unwrap();
-        let cache_manager = file_cache_manager_factory.get_with_name(channel).await;
-        if cache_manager.is_err() {
-            return Ok(cache_manager.map(|_| "".to_string()));
-        }
-        let cache_manager = cache_manager.unwrap();
-        Ok(cache_manager.path(tag).await)
-    }
-
     pub fn spawn_handle(&self) -> tokio::runtime::Handle {
         self.available_runtime().handle().clone()
-    }
-
-    fn initialize_file_cache(
-        tokio_runtime: &Runtime,
-        config: Option<FileCacheConfig>,
-        storage_manager: Arc<dyn StorageManager>,
-    ) -> Result<Arc<dyn FileCacheManagerFactory>, InitError> {
-        if config.is_none() {
-            return Err(InitError::Configuration("config is null".to_string()));
-        }
-        let config = config.unwrap();
-        let factory = tokio_runtime
-            .block_on(async { Self::create_file_cache_factory(config, storage_manager).await })?;
-        Ok(factory)
     }
 
     fn initialize_cookie_store(
@@ -373,46 +229,5 @@ impl ServiceRuntime {
     fn create_storage_manager() -> Result<Arc<dyn StorageManager>, InitError> {
         let backend = AsyncStorageManager::new();
         Ok(Arc::new(backend))
-    }
-
-    async fn create_file_cache_factory(
-        mut config: FileCacheConfig,
-        storage_manager: Arc<dyn StorageManager>,
-    ) -> Result<Arc<dyn FileCacheManagerFactory>, InitError> {
-        let channels = config.channels.take();
-
-        let factory = SingletonFileCacheManagerFactory::new(
-            config,
-            storage_manager,
-            |config, channel, storage_manager| {
-                let path = format!("{}/{}", config.base_path, channel.name);
-                let manager = DefaultFileCacheManager::new(
-                    path,
-                    config.auto_save_interval,
-                    channel,
-                    storage_manager,
-                );
-                let manager = Arc::new(manager);
-
-                let _ = manager.clone().start_auto_save();
-                manager
-            },
-        );
-        let factory = Arc::new(factory);
-
-        if channels.is_some() {
-            let channels = channels.unwrap();
-            for channel_config in channels {
-                let name = channel_config.name;
-                let extension = channel_config.extension;
-
-                let _ = factory
-                    .create_with_name(name, extension)
-                    .await
-                    .map_err(|e| InitError::FileCacheInit(e.to_string()))?;
-            }
-        }
-
-        Ok(factory)
     }
 }

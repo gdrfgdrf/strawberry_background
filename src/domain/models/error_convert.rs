@@ -1,9 +1,12 @@
+use std::io::Error;
 use std::sync::PoisonError;
 #[cfg(target_os = "android")]
 use android_media::MicError;
 use rodio::decoder::DecoderError;
 use rodio::DeviceSinkError;
 use rodio::source::SeekError;
+use tokio::time::error::Elapsed;
+use crate::db::initializer::DatabaseError;
 use crate::domain::models::audio_models::AudioError;
 use crate::domain::models::coordinator_models::{CategorizerError, CoordinatorError, DiscoverError, QueuerError, RegistryError};
 use crate::domain::models::file_cache_models::CacheError;
@@ -12,6 +15,24 @@ use crate::utils::waiter::TimeoutError;
 
 impl From<StorageError> for CacheError {
     fn from(value: StorageError) -> Self {
+        CacheError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<Error> for CacheError {
+    fn from(value: Error) -> Self {
+        CacheError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<Elapsed> for CacheError {
+    fn from(value: Elapsed) -> Self {
+        CacheError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<DatabaseError> for CacheError {
+    fn from(value: DatabaseError) -> Self {
         CacheError::ErrorForward(value.to_string())
     }
 }

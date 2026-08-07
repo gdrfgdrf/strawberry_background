@@ -1,487 +1,473 @@
-use crate::domain::models::file_cache_models::{CacheChannel, CacheError, CacheRecord};
-use crate::domain::models::storage_models::{ReadFile, WriteFile, WriteMode};
-use crate::domain::traits::file_cache_traits::{FileCacheManager, FileCacheManagerFactory};
-use crate::domain::traits::storage_traits::StorageManager;
-use crate::rkv::rkv_impl::RKV_SERVICE;
-use crate::service::config::FileCacheConfig;
-use async_trait::async_trait;
-use dashmap::DashMap;
-use rkv::SingleStore;
-use rkv::backend::SafeModeDatabase;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use tokio::fs::{File, try_exists};
-use tokio::sync::{Mutex, RwLock};
-use tracing::{Level, span, Instrument};
+use crate::db::models::preclude::{CacheChannelsModel, CacheRecordsActiveModel, CacheRecordsModel};
+use crate::db::services::cache_services::CacheService;
+use crate::domain::models::file_cache_models::CacheError;
+use crate::domain::models::storage_models::{EnsureMode, WriteMode};
+use crate::domain::traits::file_cache_traits::{AsyncFileCacheManager, AsyncFileOperator};
+use crate::utils::async_priority_queue::AsyncPriorityQueue;
+use bytes::Bytes;
+use parking_lot::{Mutex, RwLock};
+use sea_orm::{ActiveValue, IntoActiveModel};
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
+use tokio::runtime::Runtime;
+use tokio::sync::{Notify, Semaphore};
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-pub struct SingletonFileCacheManagerFactory<T>
-where
-    T: Fn(&FileCacheConfig, CacheChannel, Arc<dyn StorageManager>) -> Arc<dyn FileCacheManager>,
-{
-    pub config: FileCacheConfig,
-    map: DashMap<String, Arc<dyn FileCacheManager>>,
-    creator: T,
-    storage_manager: Arc<dyn StorageManager>,
-    single_store: SingleStore<SafeModeDatabase>,
-    _session: span::Span,
+#[derive(Eq, PartialEq)]
+enum Priority {
+    Normal,
+    Flush,
 }
 
-pub struct DefaultFileCacheManager {
-    name: String,
+struct QueuedRequest {
     path: String,
-    extension: Option<String>,
-    save_lock: Mutex<()>,
-    auto_save_interval: Duration,
-    dirty: Arc<AtomicBool>,
-    map: DashMap<String, RwLock<CacheRecord>>,
-    storage_manager: Arc<dyn StorageManager>,
-    single_store: SingleStore<SafeModeDatabase>,
-    _session: span::Span,
+    bytes: Bytes,
+    write_mode: WriteMode,
+    ensure_mode: Option<EnsureMode>,
+    add_time: u64,
+    priority: RwLock<Priority>,
+    finish_notify: Arc<Notify>,
 }
 
-impl<T> SingletonFileCacheManagerFactory<T>
-where
-    T: Fn(&FileCacheConfig, CacheChannel, Arc<dyn StorageManager>) -> Arc<dyn FileCacheManager>,
-{
-    pub fn new(
-        config: FileCacheConfig,
-        storage_manager: Arc<dyn StorageManager>,
-        creator: T,
-    ) -> Self {
-        let session = span!(Level::INFO, "file-cache-manager-factory");
-        let _ = session.enter();
-        tracing::debug!(
-            base_path = ?config.base_path,
-            auto_save_interval_ms = ?config.auto_save_interval.as_millis(),
-            channels = ?config.channels,
-            "creating file cache manager factory"
-        );
-
-        let mut rkv_service = RKV_SERVICE.write().unwrap();
-        let rkv_service = rkv_service.as_mut().unwrap();
-        let store = rkv_service.init_db("file_cache").unwrap();
-
-        Self {
-            config,
-            map: DashMap::new(),
-            creator,
-            storage_manager,
-            single_store: store,
-            _session: session,
-        }
-    }
+pub struct FileCacheCoordinator<T: AsyncFileCacheManager> {
+    managers: HashMap<String, Arc<T>>,
 }
 
-impl DefaultFileCacheManager {
-    pub fn new(
-        path: String,
-        auto_save_interval: Duration,
-        channel: CacheChannel,
-        storage_manager: Arc<dyn StorageManager>,
-    ) -> Self {
-        let session = span!(Level::INFO, "default-file-cache-manager");
-        let _ = session.enter();
-        tracing::debug!(
-            path = ?path,
-            auto_save_interval = ?auto_save_interval.as_millis(),
-            "creating default file cache manager"
-        );
+pub struct DefaultAsyncFileCacheManager {
+    base_path: String,
 
-        let mut rkv_service = RKV_SERVICE.write().unwrap();
-        let rkv_service = rkv_service.as_mut().unwrap();
-        let store = rkv_service.init_db("file_cache").unwrap();
+    channel: CacheChannelsModel,
+    records: Arc<RwLock<HashMap<String, CacheRecordsModel>>>,
 
-        let records = channel.records;
-        let map: DashMap<String, RwLock<CacheRecord>> = DashMap::new();
-        records.into_iter().for_each(|record| {
-            let tag = record.tag.clone();
-            map.insert(tag, RwLock::new(record));
-        });
+    operator: Arc<DefaultAsyncFileOperator>,
+}
 
-        Self {
-            name: channel.name,
-            path,
-            extension: channel.extension,
-            save_lock: Mutex::new(()),
-            auto_save_interval,
-            dirty: Arc::new(AtomicBool::new(false)),
-            map,
-            storage_manager,
-            single_store: store,
-            _session: session,
+pub struct DefaultAsyncFileOperator {
+    tokio_runtime: Arc<Runtime>,
+    queue: Arc<AsyncPriorityQueue<Arc<QueuedRequest>>>,
+    stash: Arc<RwLock<HashMap<String, Weak<QueuedRequest>>>>,
+    handle: Mutex<Option<JoinHandle<()>>>,
+    cancellation_token: CancellationToken,
+}
+
+impl FileCacheCoordinator<DefaultAsyncFileCacheManager> {
+    pub async fn new(
+        tokio_runtime: Arc<Runtime>,
+        base_path: String,
+        channel_names: Vec<String>,
+    ) -> Result<Self, CacheError> {
+        let channels = CacheService::find_channels_by_names(channel_names.clone()).await?;
+        if channels.is_none() {
+            return Err(CacheError::ChannelNotExists(channel_names.join(", ")));
         }
-    }
-
-    fn build_path(&self, filename: &String) -> String {
-        if self.extension.is_some() {
-            return format!(
-                "{}/{}.{}",
-                self.path,
-                filename,
-                self.extension.as_ref().unwrap()
+        let channels = channels.unwrap();
+        let mut managers = HashMap::<String, Arc<DefaultAsyncFileCacheManager>>::new();
+        for channel in channels {
+            let name = channel.name.clone();
+            let manager = Arc::new(
+                DefaultAsyncFileCacheManager::new(
+                    tokio_runtime.clone(),
+                    base_path.clone(),
+                    channel,
+                )
+                .await?,
             );
+            managers.insert(name, manager);
         }
 
-        format!("{}/{}", self.path, filename)
+        Ok(Self { managers })
     }
 
-    fn make_dirty(&self) {
-        self.dirty.store(true, Ordering::SeqCst);
+    pub fn manager(&self, channel_name: &String) -> Option<Arc<DefaultAsyncFileCacheManager>> {
+        self.managers
+            .get(channel_name)
+            .map(|manager| manager.clone())
+    }
+}
+
+impl DefaultAsyncFileCacheManager {
+    pub async fn new(
+        tokio_runtime: Arc<Runtime>,
+        base_path: String,
+        channel: CacheChannelsModel,
+    ) -> Result<Self, CacheError> {
+        let records = CacheService::find_records_by_channel_id(channel.id.clone())
+            .await?
+            .unwrap_or(Vec::new());
+        Ok(Self {
+            base_path,
+            channel,
+            records: Arc::new(RwLock::new(HashMap::from_iter(
+                records
+                    .into_iter()
+                    .map(|e| (e.tag.clone(), e))
+                    .collect::<Vec<(String, CacheRecordsModel)>>(),
+            ))),
+            operator: Arc::new(DefaultAsyncFileOperator::new(tokio_runtime)),
+        })
     }
 
-    fn make_clean(&self) {
-        self.dirty.store(false, Ordering::SeqCst);
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty.load(Ordering::SeqCst)
-    }
-
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn ensure_directory_exists(&self, directory: &String) -> Result<(), CacheError> {
-        if !try_exists(directory)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "checking directory if exists error");
-                CacheError::IO(e.to_string())
-            })?
-        {
-            return tokio::fs::create_dir_all(directory)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "create directory error");
-                    CacheError::IO(e.to_string())
-                });
+    pub fn build_file_path(&self, filename: &String) -> String {
+        let extension = self.channel.extension.as_ref();
+        if extension.is_none() {
+            return format!("{}/{}", self.base_path, filename);
         }
-        Ok(())
+        format!("{}/{}.{}", self.base_path, filename, extension.unwrap())
     }
+}
 
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn ensure_file_exists(&self, filename: &String) -> Result<(), CacheError> {
-        if !try_exists(filename)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "checking file if exists error");
-                CacheError::IO(e.to_string())
-            })?
-        {
-            let file = File::create_new(filename)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "create file error");
-                    CacheError::IO(e.to_string())
-                })?;
-
-            file.sync_all()
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "sync filesystem error");
-                    CacheError::IO(e.to_string())
-                })?
+impl DefaultAsyncFileOperator {
+    pub fn new(tokio_runtime: Arc<Runtime>) -> Self {
+        Self {
+            tokio_runtime,
+            queue: Arc::new(AsyncPriorityQueue::with_capacity(128)),
+            stash: Arc::new(RwLock::new(HashMap::with_capacity(128))),
+            handle: Mutex::new(None),
+            cancellation_token: CancellationToken::new(),
         }
-        Ok(())
     }
 
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    pub fn start_auto_save(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
-        let store = self.dirty.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(self.auto_save_interval);
-            tracing::debug!(interval = ?interval.period().as_millis(), "start ticking");
-            
-            loop {
-                interval.tick().await;
-                if store.load(Ordering::SeqCst) {
-                    if let Err(e) = self.persist().await {
-                        tracing::error!(error = %e, "Failed to auto-save cache channel");
+    async fn write_file(bytes: &QueuedRequest) {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(bytes.write_mode == WriteMode::Append)
+            .write(bytes.write_mode == WriteMode::Cover)
+            .open(&bytes.path)
+            .await;
+        if file.is_err() {
+            return;
+        }
+        let mut file = file.unwrap();
+        let result = timeout(Duration::from_secs(60), file.write_all(&bytes.bytes)).await;
+        if result.is_err() {
+            return;
+        }
+        let result = result.unwrap();
+        if result.is_err() {
+            return;
+        }
+        if bytes.ensure_mode.is_none() {
+            return;
+        }
+        let ensure_mode = bytes.ensure_mode.as_ref().unwrap();
+        match ensure_mode {
+            EnsureMode::Flush => {
+                let _ = timeout(Duration::from_secs(60), file.flush()).await;
+            }
+            EnsureMode::SyncData => {
+                let _ = timeout(Duration::from_secs(60), file.sync_data()).await;
+            }
+            EnsureMode::SyncAll => {
+                let _ = timeout(Duration::from_secs(60), file.sync_all()).await;
+            }
+        }
+    }
+
+    async fn read_file(path: &String) -> Result<Bytes, CacheError> {
+        let result = tokio::fs::read(path).await?;
+        let bytes = Bytes::from(result);
+        Ok(bytes)
+    }
+
+    pub fn init(&self) {
+        let cloned_queue = self.queue.clone();
+        let cloned_stash = self.stash.clone();
+        let cloned_cancellation_token = self.cancellation_token.clone();
+        *self.handle.lock() = Some(self.tokio_runtime.spawn(async move {
+            let queue = cloned_queue;
+            let stash = cloned_stash;
+            let cancellation_token = cloned_cancellation_token;
+            let semaphore = Arc::new(Semaphore::new(16));
+
+            cancellation_token
+                .run_until_cancelled(async {
+                    loop {
+                        let request = queue.pop().await;
+                        let cloned_stash = stash.clone();
+                        let cloned_semaphore = semaphore.clone();
+                        tokio::spawn(async move {
+                            let _ = cloned_semaphore.acquire().await;
+                            Self::write_file(&request).await;
+                            cloned_stash.write().remove(&request.path);
+                            request.finish_notify.notify_waiters();
+                        });
+                    }
+                })
+                .await;
+        }));
+    }
+
+    fn dispose(&self) {
+        self.cancellation_token.cancel();
+    }
+}
+
+impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
+    async fn cache(&self, tag: String, sentence: String, bytes: Bytes) -> Result<(), CacheError> {
+        let mut records = self.records.write();
+        if records.contains_key(&tag) {
+            let record = records.remove(&tag).unwrap();
+            let id = record.id.clone();
+            let filename = record.filename.clone();
+
+            let record = CacheRecordsModel {
+                id: record.id,
+                tag: record.tag,
+                filename: record.filename,
+                sentence,
+                channel_id: record.channel_id,
+            };
+            let path = self.build_file_path(&filename);
+            let result = self
+                .operator
+                .write(
+                    path.clone(),
+                    bytes,
+                    WriteMode::Cover,
+                    Some(EnsureMode::SyncAll),
+                )
+                .await;
+            return match result {
+                Ok(()) => {
+                    let result = self
+                        .operator
+                        .flush_single(&path, Duration::from_secs(60))
+                        .await;
+                    match result {
+                        Ok(()) => {
+                            let active_model = record.clone().into_active_model();
+                            CacheService::insert_record(active_model).await?;
+                            records.insert(tag, record);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            CacheService::remove_record_by_id(id).await?;
+                            Err(e)
+                        }
                     }
                 }
-            }
-        }.in_current_span())
-    }
-}
-
-#[async_trait]
-impl<T> FileCacheManagerFactory for SingletonFileCacheManagerFactory<T>
-where
-    T: Fn(&FileCacheConfig, CacheChannel, Arc<dyn StorageManager>) -> Arc<dyn FileCacheManager>
-        + Send
-        + Sync
-        + 'static,
-{
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn create_with_name(
-        &self,
-        name: String,
-        extension: Option<String>,
-    ) -> Result<Arc<dyn FileCacheManager>, CacheError> {
-        if self.map.contains_key(&name) {
-            return Ok(self.map.get(&name).unwrap().clone());
-        }
-        let channel = self.create_channel(name, extension).await?;
-        self.create_with_channel(channel).await
-    }
-
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn create_channel(
-        &self,
-        name: String,
-        extension: Option<String>,
-    ) -> Result<CacheChannel, CacheError> {
-        let rkv_service = RKV_SERVICE.read().unwrap();
-        let rkv_service = rkv_service.as_ref().unwrap();
-        let channel = rkv_service
-            .read_rkyv_cache_channel_data(&self.single_store, &name)
-            .map_err(|e| {
-                tracing::error!(error = %e, "read cache channel data error");
-                CacheError::ErrorForward(e.to_string())
-            })?;
-
-        if channel.is_none() {
-            let channel = CacheChannel {
-                name,
-                extension,
-                records: Vec::new(),
+                Err(e) => {
+                    CacheService::remove_record_by_id(id).await?;
+                    Err(e)
+                }
             };
-            return Ok(channel);
         }
+        let channel_id = self.channel.id.clone();
+        let uuid = Uuid::new_v4().to_string();
+        let path = self.build_file_path(&uuid);
+        self.operator
+            .write(
+                path.clone(),
+                bytes,
+                WriteMode::Cover,
+                Some(EnsureMode::SyncAll),
+            )
+            .await?;
+        self.operator
+            .flush_single(&path, Duration::from_secs(60))
+            .await?;
 
-        Ok(channel.unwrap())
-    }
-
-    #[tracing::instrument(skip(self, channel), parent = &self._session)]
-    async fn create_with_channel(
-        &self,
-        channel: CacheChannel,
-    ) -> Result<Arc<dyn FileCacheManager>, CacheError> {
-        let name = channel.name.clone();
-        if self.map.contains_key(&name) {
-            return Ok(self.map.get(&name).unwrap().clone());
-        }
-        let manager = (self.creator)(&self.config, channel, self.storage_manager.clone());
-        self.map.insert(name, manager.clone());
-
-        Ok(manager)
-    }
-
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn get_with_name(&self, name: &String) -> Result<Arc<dyn FileCacheManager>, CacheError> {
-        if !self.map.contains_key(name) {
-            return Err(CacheError::ManagerNotExist(name.clone()));
-        }
-        let manager = self.map.get(name).unwrap();
-        Ok(manager.clone())
-    }
-}
-
-#[async_trait]
-impl FileCacheManager for DefaultFileCacheManager {
-    #[tracing::instrument(skip(self, bytes), parent = &self._session)]
-    async fn cache(
-        &self,
-        tag: String,
-        sentence: String,
-        bytes: &Vec<u8>,
-    ) -> Result<(), CacheError> {
-        if self.map.contains_key(&tag) {
-            tracing::debug!("tag is existing in map, overwriting");
-            
-            let entry = self.map.get_mut(&tag).ok_or(CacheError::TagNotExist(tag))?;
-            let mut record = entry
-                .try_write()
-                .map_err(|e| CacheError::Lock(e.to_string()))?;
-
-            let path = self.build_path(&record.filename);
-            self.ensure_directory_exists(&self.path).await?;
-            self.ensure_file_exists(&path).await?;
-
-            let write_file = WriteFile {
-                path,
-                mode: WriteMode::Cover,
-                timeout: Duration::from_secs(60),
-                ensure_mode: None,
-                data: bytes,
-            };
-
-            return self
-                .storage_manager
-                .write(write_file)
-                .await
-                .inspect(|_| {
-                    record.sentence = sentence;
-                    record.size = bytes.len();
-                    self.make_dirty();
-                })
-                .map_err(|e| {
-                    tracing::error!(error = %e, "write file error");
-                    CacheError::from(e)
-                });
-        }
-
-        let filename = Uuid::new_v4().to_string();
-        let path = self.build_path(&filename);
-        self.ensure_directory_exists(&self.path).await?;
-        self.ensure_file_exists(&path).await?;
-
-        let write_file = WriteFile {
-            path,
-            mode: WriteMode::Cover,
-            timeout: Duration::from_secs(60),
-            ensure_mode: None,
-            data: bytes,
+        let record = CacheRecordsActiveModel {
+            id: ActiveValue::NotSet,
+            tag: ActiveValue::Set(tag.clone()),
+            filename: ActiveValue::Set(uuid.clone()),
+            sentence: ActiveValue::Set(sentence),
+            channel_id: ActiveValue::Set(channel_id),
         };
-
-        self.storage_manager
-            .write(write_file)
-            .await
-            .inspect(|_| {
-                let record = CacheRecord {
-                    tag: tag.clone(),
-                    filename,
-                    size: bytes.len(),
-                    sentence,
-                };
-
-                self.map.insert(tag, RwLock::new(record));
-                self.make_dirty();
-            })
-            .map_err(|e| {
-                tracing::error!(error = %e, "write file error");
-                CacheError::from(e)
-            })
+        let record = CacheService::insert_record(record).await?;
+        records.insert(tag, record);
+        Ok(())
     }
 
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn should_update(&self, tag: &String, sentence: &String) -> Result<bool, CacheError> {
-        let entry = self
-            .map
-            .get_mut(tag)
-            .ok_or(CacheError::TagNotExist(tag.clone()))?;
-        let record = entry
-            .try_write()
-            .map_err(|e| CacheError::Lock(e.to_string()))?;
-        let filename = &record.filename;
-        if !try_exists(self.build_path(filename))
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "check if file exists error");
-                CacheError::IO(e.to_string())
-            })?
-        {
+    async fn should_update(&self, tag: &String, new_sentence: &String) -> Result<bool, CacheError> {
+        let records = self.records.read();
+        if !records.contains_key(tag) {
             return Ok(true);
         }
-
-        Ok(record.sentence != *sentence)
-    }
-
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn fetch(&self, tag: &String) -> Result<Vec<u8>, CacheError> {
-        let entry = self
-            .map
-            .get_mut(tag)
-            .ok_or(CacheError::TagNotExist(tag.clone()))?;
-        let record = entry
-            .try_write()
-            .map_err(|e| CacheError::Lock(e.to_string()))?;
-        let filename = &record.filename;
-        let path = self.build_path(filename);
-
-        if !try_exists(&path)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "check if file exists error");
-                CacheError::IO(e.to_string())
-            })?
-        {
-            return Err(CacheError::FileNotExist(path));
+        let record = records.get(tag).unwrap();
+        if &record.sentence != new_sentence {
+            return Ok(true);
         }
-
-        let read_file = ReadFile::path(path);
-        self.storage_manager
-            .read(read_file)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "read file error");
-                CacheError::from(e)
-            })
+        Ok(false)
     }
 
-    async fn flush(&self, tag: &String) -> Result<(), CacheError> {
-        Ok(())
+    async fn fetch(&self, tag: &String) -> Result<Bytes, CacheError> {
+        let records = self.records.read();
+        if !records.contains_key(tag) {
+            return Err(CacheError::RecordNotExists(tag.clone()));
+        }
+        let record = records.get(tag).unwrap();
+        let path = self.build_file_path(&record.filename);
+        self.operator.read(&path).await
     }
 
-    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn persist(&self) -> Result<(), CacheError> {
-        let is_dirty = self.is_dirty();
-        tracing::debug!(is_dirty = ?is_dirty, "persisting");
-        if !is_dirty {
-            return Ok(());
-        }
-
-        let _ = self.save_lock.lock();
-
-        let mut records: Vec<CacheRecord> = Vec::new();
-        for record in &self.map {
-            let record = record.read().await;
-            let record = record.clone();
-            records.push(record);
-        }
-
-        let channel = CacheChannel {
-            name: self.name.clone(),
-            extension: self.extension.clone(),
-            records,
-        };
-
-        let rkv_service = RKV_SERVICE.read().unwrap();
-        let rkv_service = rkv_service.as_ref().unwrap();
-        rkv_service
-            .write_rkyv_cache_channel_data(&self.single_store, &self.name, &channel)
-            .map_err(|e| {
-                tracing::error!(error = %e, "writing channel datas error");
-                CacheError::ErrorForward(e.to_string())
-            })?;
-        self.make_clean();
         Ok(())
     }
 
-    #[tracing::instrument(skip(self), parent = &self._session)]
-    async fn record(&self, tag: &String) -> Result<CacheRecord, CacheError> {
-        let entry = self
-            .map
-            .get_mut(tag)
-            .ok_or(CacheError::TagNotExist(tag.clone()))?;
-        let record = entry
-            .try_write()
-            .map_err(|e| CacheError::Lock(e.to_string()))?;
-        let record = record.clone();
+    async fn record(&self, tag: &String) -> Result<CacheRecordsModel, CacheError> {
+        let records = self.records.read();
+        if !records.contains_key(tag) {
+            return Err(CacheError::RecordNotExists(tag.clone()));
+        }
+        let record = records.get(tag).unwrap().clone();
         Ok(record)
     }
 
-    #[tracing::instrument(skip(self), parent = &self._session)]
     async fn path(&self, tag: &String) -> Result<String, CacheError> {
-        let entry = self
-            .map
-            .get_mut(tag)
-            .ok_or(CacheError::TagNotExist(tag.clone()))?;
-        let record = entry
-            .try_write()
-            .map_err(|e| CacheError::Lock(e.to_string()))?;
-        let filename = &record.filename;
-        let path = self.build_path(filename);
-
-        if !try_exists(&path)
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "check if file exists error");
-                CacheError::IO(e.to_string())
-            })?
-        {
-            return Err(CacheError::FileNotExist(path));
+        let records = self.records.read();
+        if !records.contains_key(tag) {
+            return Err(CacheError::RecordNotExists(tag.clone()));
         }
-
+        let record = records.get(tag).unwrap();
+        let path = self.build_file_path(&record.filename);
         Ok(path)
     }
+}
+
+impl AsyncFileOperator for DefaultAsyncFileOperator {
+    async fn write(
+        &self,
+        path: String,
+        bytes: Bytes,
+        write_mode: WriteMode,
+        ensure_mode: Option<EnsureMode>,
+    ) -> Result<(), CacheError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let key = path.clone();
+        let request = Arc::new(QueuedRequest {
+            path,
+            bytes,
+            write_mode,
+            ensure_mode,
+            add_time: now,
+            priority: RwLock::new(Priority::Normal),
+            finish_notify: Arc::new(Notify::new()),
+        });
+        self.stash.write().insert(key, Arc::downgrade(&request));
+        self.queue.push(request).await;
+
+        Ok(())
+    }
+
+    async fn read(&self, path: &String) -> Result<Bytes, CacheError> {
+        let stash = self.stash.read();
+        let request = stash.get(path);
+        if request.is_none() {
+            return Err(CacheError::FileNotSubmitted(path.clone()));
+        }
+        let request = request.unwrap().upgrade();
+        if request.is_none() {
+            return Self::read_file(path).await;
+        }
+        let request = request.unwrap();
+        Ok(request.bytes.clone())
+    }
+
+    async fn flush_single(&self, path: &String, duration: Duration) -> Result<(), CacheError> {
+        let stash = self.stash.read();
+        let request = stash.get(path);
+        if request.is_none() {
+            return Ok(());
+        }
+        let request = request.unwrap().upgrade();
+        if request.is_none() {
+            return Ok(());
+        }
+        let request = request.unwrap();
+        *request.priority.write() = Priority::Flush;
+
+        timeout(duration, request.finish_notify.notified()).await?;
+
+        Ok(())
+    }
+}
+
+impl Priority {
+    fn ordinal(&self) -> u8 {
+        match self {
+            Priority::Normal => 1,
+            Priority::Flush => 0,
+        }
+    }
+}
+
+impl Drop for DefaultAsyncFileOperator {
+    fn drop(&mut self) {
+        self.dispose();
+    }
+}
+
+impl Ord for QueuedRequest {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let p1 = self.priority.read();
+        let p2 = self.priority.read();
+        if *p1 != *p2 {
+            return p1.cmp(&p2);
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let len1 = self.bytes.len() as u64;
+        let len2 = other.bytes.len() as u64;
+        let delta_time1 = now - self.add_time;
+        let delta_time2 = now - other.add_time;
+        let p1 = u64_to_unit_float(len1) - 4.0 * u64_to_unit_float(delta_time1);
+        let p2 = u64_to_unit_float(len2) - 4.0 * u64_to_unit_float(delta_time2);
+
+        p1.total_cmp(&p2)
+    }
+}
+
+impl PartialOrd for QueuedRequest {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Priority {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let o1 = self.ordinal();
+        let o2 = other.ordinal();
+        if o1 == o2 {
+            return Ordering::Equal;
+        }
+
+        if self.ordinal() < other.ordinal() {
+            return Ordering::Greater;
+        }
+        Ordering::Less
+    }
+}
+
+impl PartialOrd for Priority {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for QueuedRequest {}
+
+impl PartialEq for QueuedRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.path.eq(&other.path)
+    }
+}
+
+fn u64_to_unit_float(x: u64) -> f64 {
+    let bits = (x >> 11) | (970u64 << 52);
+    f64::from_bits(bits)
 }

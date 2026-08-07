@@ -1,37 +1,27 @@
-use crate::domain::models::file_cache_models::{CacheChannel, CacheError, CacheRecord};
-use async_trait::async_trait;
-use std::sync::Arc;
+use crate::domain::models::file_cache_models::CacheError;
+use crate::domain::models::storage_models::{EnsureMode, WriteMode};
+use bytes::Bytes;
+use std::time::Duration;
+use crate::db::models::preclude::CacheRecordsModel;
 
-#[async_trait]
-pub trait FileCacheManagerFactory: Send + Sync + 'static {
-    async fn create_with_name(
+pub trait AsyncFileOperator {
+    async fn write(
         &self,
-        name: String,
-        extension: Option<String>,
-    ) -> Result<Arc<dyn FileCacheManager>, CacheError>;
-    
-    async fn create_channel(
-        &self,
-        name: String,
-        extension: Option<String>,
-    ) -> Result<CacheChannel, CacheError>;
-
-    async fn create_with_channel(
-        &self,
-        channel: CacheChannel,
-    ) -> Result<Arc<dyn FileCacheManager>, CacheError>;
-    
-    async fn get_with_name(&self, name: &String) -> Result<Arc<dyn FileCacheManager>, CacheError>;
+        path: String,
+        bytes: Bytes,
+        write_mode: WriteMode,
+        ensure_mode: Option<EnsureMode>,
+    ) -> Result<(), CacheError>;
+    async fn read(&self, path: &String) -> Result<Bytes, CacheError>;
+    async fn flush_single(&self, path: &String, timeout: Duration) -> Result<(), CacheError>;
 }
 
-#[async_trait]
-pub trait FileCacheManager: Send + Sync + 'static {
-    async fn cache(&self, tag: String, sentence: String, bytes: &Vec<u8>) -> Result<(), CacheError>;
-    async fn should_update(&self, tag: &String, sentence: &String) -> Result<bool, CacheError>;
-    async fn fetch(&self, tag: &String) -> Result<Vec<u8>, CacheError>;
-    async fn flush(&self, tag: &String) -> Result<(), CacheError>;
+pub trait AsyncFileCacheManager {
+    async fn cache(&self, tag: String, sentence: String, bytes: Bytes) -> Result<(), CacheError>;
+    async fn should_update(&self, tag: &String, new_sentence: &String) -> Result<bool, CacheError>;
+    async fn fetch(&self, tag: &String) -> Result<Bytes, CacheError>;
     async fn persist(&self) -> Result<(), CacheError>;
 
-    async fn record(&self, tag: &String) -> Result<CacheRecord, CacheError>;
+    async fn record(&self, tag: &String) -> Result<CacheRecordsModel, CacheError>;
     async fn path(&self, tag: &String) -> Result<String, CacheError>;
 }

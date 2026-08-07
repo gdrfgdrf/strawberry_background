@@ -29,7 +29,7 @@ pub fn create_service_exporter_with_tokio_runtime(
 #[cfg(test)]
 mod tests {
     use crate::domain::models::coordinator_models::{
-        CategorizerError, CoordinatorConfiguration, Identifier, Priority, Request,
+        CategorizerError, CoordinatorConfiguration, Identifier, Request,
         RunnerConfiguration, RunnerError, RunnerSnapshot, RunnerStatus,
     };
     use crate::domain::models::http_models::{HttpEndpoint, HttpMethod};
@@ -46,12 +46,10 @@ mod tests {
     use crate::superstructure::coordinator::coordinator::DefaultCoordinator;
     use crate::superstructure::coordinator::registry::RunnerRegistry;
     use parking_lot::Mutex;
-    use std::ops::Deref;
     use std::sync::Arc;
     use std::thread::sleep;
     use std::time::{Duration, SystemTime};
     use tokio::runtime::Runtime;
-    use tokio_test::{assert_err, assert_ok};
     use tokio_util::sync::CancellationToken;
 
     macro_rules! await_test {
@@ -185,163 +183,6 @@ mod tests {
         let read_sum: f32 = read_costs.iter().sum();
         let read_average = read_sum / read_costs.len() as f32;
         println!("read average: {:?}ms", read_average);
-    }
-
-    #[test]
-    fn test_file_cache_cache_fetch() {
-        let runtime = initialize_runtime();
-
-        let data = "http world, this is the file cache test\n"
-            .repeat(10086 ^ 2)
-            .to_string()
-            .into_bytes();
-
-        let factory = runtime.file_cache_manager_factory.clone().unwrap();
-        let channel1 = await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
-
-        let _ =
-            await_test!(channel1.cache("test-tag".to_string(), "test-sentence".to_string(), &data))
-                .unwrap();
-        let fetched = await_test!(channel1.fetch(&"test-tag".to_string())).unwrap();
-
-        assert_eq!(data, fetched);
-    }
-
-    #[test]
-    fn test_file_cache_fetch() {
-        let runtime = initialize_runtime();
-
-        let data = "http world, this is the file cache test\n"
-            .repeat(10086 ^ 2)
-            .to_string()
-            .into_bytes();
-
-        let factory = runtime.file_cache_manager_factory.clone().unwrap();
-        let channel1 = await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
-
-        for i in 0..10 {
-            let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i))).unwrap();
-            assert_eq!(data, fetched);
-        }
-    }
-
-    #[test]
-    fn test_file_cache_cache_fetch_with_extension() {
-        let runtime = initialize_runtime();
-
-        let data = "http world, this is the file cache test\n"
-            .repeat(10086 ^ 2)
-            .to_string()
-            .into_bytes();
-
-        let factory = runtime.file_cache_manager_factory.clone().unwrap();
-        let channel2 = await_test!(factory.get_with_name(&"test-channel-2".to_string())).unwrap();
-
-        let _ =
-            await_test!(channel2.cache("test-tag".to_string(), "test-sentence".to_string(), &data))
-                .unwrap();
-        let fetched = await_test!(channel2.fetch(&"test-tag".to_string())).unwrap();
-
-        assert_eq!(data, fetched);
-    }
-
-    #[test]
-    fn test_file_cache_cache_flush() {
-        let runtime = initialize_runtime();
-
-        let data = "http world, this is the file cache test\n"
-            .repeat(10086 ^ 2)
-            .to_string()
-            .into_bytes();
-
-        let factory = runtime.file_cache_manager_factory.clone().unwrap();
-        let channel1 = await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
-
-        let _ =
-            await_test!(channel1.cache("test-tag".to_string(), "test-sentence".to_string(), &data))
-                .unwrap();
-
-        let fetched = await_test!(channel1.fetch(&"test-tag".to_string())).unwrap();
-        assert_eq!(data, fetched);
-
-        let _ = await_test!(channel1.flush(&"test-tag".to_string())).unwrap();
-
-        let fetched = await_test!(channel1.fetch(&"test-tag".to_string()));
-        assert_err!(fetched);
-    }
-
-    #[test]
-    fn test_file_cache_persist() {
-        let data = "http world, this is the file cache test\n"
-            .repeat(10086 ^ 2)
-            .to_string()
-            .into_bytes();
-
-        let runtime = initialize_runtime();
-        for i in 0..10 {
-            {
-                let factory = runtime.file_cache_manager_factory.clone().unwrap();
-                let channel1 =
-                    await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
-
-                await_test!(channel1.cache(
-                    format!("test-tag-{}", i),
-                    format!("test-sentence-{}", i),
-                    &data
-                ))
-                .unwrap();
-
-                let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i))).unwrap();
-                assert_eq!(data, fetched);
-
-                let persist = await_test!(channel1.persist());
-                assert_ok!(persist);
-            }
-            // {
-            //     let runtime = initialize_runtime();
-            //
-            //     let factory = runtime.file_cache_manager_factory.clone().unwrap();
-            //     let channel1 =
-            //         await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
-            //
-            //     let fetched = await_test!(channel1.fetch(&format!("test-tag-{}", i)));
-            //     assert_ok!(&fetched);
-            //
-            //     let fetched = fetched.unwrap();
-            //     assert_eq!(fetched, data);
-            // }
-        }
-    }
-
-    #[test]
-    fn test_file_cache_auto_save() {
-        let data = "http world, this is the file cache test\n"
-            .repeat(10086 ^ 2)
-            .to_string()
-            .into_bytes();
-
-        let runtime = initialize_runtime();
-
-        for _ in 0..2 {
-            let factory = runtime.file_cache_manager_factory.clone().unwrap();
-            let channel1 =
-                await_test!(factory.get_with_name(&"test-channel-1".to_string())).unwrap();
-
-            let _ = await_test!(channel1.cache(
-                format!("test-tag-auto-save-{}", 0),
-                format!("test-sentence-auto-save-{}", 0),
-                &data
-            ))
-            .unwrap();
-
-            let fetched =
-                await_test!(channel1.fetch(&format!("test-tag-auto-save-{}", 0))).unwrap();
-            assert_eq!(data, fetched);
-
-            sleep(Duration::from_secs(10));
-        }
-
-        await_test!(async { loop {} });
     }
 
     #[test]

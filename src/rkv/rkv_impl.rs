@@ -4,17 +4,14 @@ use rkv::{Manager, Rkv, SingleStore, StoreOptions, Value};
 use std::error::Error;
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use tracing::{span, Level};
 
 pub static RKV_SERVICE: RwLock<Option<RkvService>> = RwLock::new(None);
 
 pub fn initialize_rkv(main_path: String) {
-    let guard = RKV_SERVICE.write();
-    if guard.is_err() {
-        return;
-    }
-    let mut guard = guard.unwrap();
+    let mut guard = RKV_SERVICE.write();
     if guard.is_some() {
         return;
     }
@@ -24,7 +21,7 @@ pub fn initialize_rkv(main_path: String) {
 
 pub struct RkvService {
     pub main_path: String,
-    env: Option<Arc<RwLock<Rkv<SafeModeEnvironment>>>>,
+    env: Option<Arc<std::sync::RwLock<Rkv<SafeModeEnvironment>>>>,
     _session: span::Span
 }
 

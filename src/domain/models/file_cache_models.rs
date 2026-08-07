@@ -17,18 +17,16 @@ pub struct CacheRecord {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
+    #[error("Rkv Not Initialized")]
+    RkvNotInitialized,
     #[error("IO Error: {0}")]
     IO(String),
-    #[error("File {0} does not exist")]
-    FileNotExist(String),
-    #[error("Tag {0} does not exist")]
-    TagNotExist(String),
-    #[error("Cache Manager {0} does not exist")]
-    ManagerNotExist(String),
-    #[error("An locking error occurs when accessing {0}")]
-    Lock(String),
-    #[error("Serialize Error: {0}")]
-    Serialization(String),
+    #[error("File Not Submitted: {0}")]
+    FileNotSubmitted(String),
+    #[error("Channel Not Exists: {0}")]
+    ChannelNotExists(String),
+    #[error("Record Not Exists: {0}")]
+    RecordNotExists(String),
     #[error("Timeout: {0}")]
     Timeout(String),
     #[error("Error Forwarding: {0}")]

@@ -7,6 +7,7 @@ pub mod rkyv;
 pub mod service;
 pub mod superstructure;
 pub mod utils;
+pub mod db;
 
 use crate::service::config::RuntimeConfig;
 use crate::service::service_exporter::ServiceExporter;
