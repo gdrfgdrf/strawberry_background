@@ -37,6 +37,12 @@ impl From<DatabaseError> for CacheError {
     }
 }
 
+impl From<CacheError> for String {
+    fn from(value: CacheError) -> Self {
+        value.to_string()
+    }
+}
+
 impl<T> From<PoisonError<T>> for CoordinatorError {
     fn from(value: PoisonError<T>) -> Self {
         CoordinatorError::ErrorForward(value.to_string())

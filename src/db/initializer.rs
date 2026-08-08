@@ -1,11 +1,13 @@
-use std::ops::Deref;
-use std::time::Duration;
+use crate::db::migration::migrator::Migrator;
 use cpal::Data;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
-use sea_orm::{ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr, EntityTrait};
+use sea_orm::{
+    ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr, EntityTrait,
+};
 use sea_orm_migration::MigratorTrait;
-use crate::db::migration::migrator::Migrator;
+use std::ops::Deref;
+use std::time::Duration;
 
 #[macro_export]
 macro_rules! all_columns {
@@ -21,7 +23,13 @@ pub enum DatabaseError {
     #[error("Error Forward: {0}")]
     ErrorForward(String),
     #[error("Not Initialized")]
-    NotInitialized
+    NotInitialized,
+}
+
+impl From<DatabaseError> for String {
+    fn from(value: DatabaseError) -> Self {
+        value.to_string()
+    }
 }
 
 impl From<String> for DatabaseError {
@@ -63,7 +71,6 @@ pub async fn initialize_strawberry_background_db(db_path: &str) -> Result<(), Da
         return Ok(());
     }
     drop(db);
-
 
     let db = initialize_db(db_path).await?;
     Migrator::up(&db, None).await?;
