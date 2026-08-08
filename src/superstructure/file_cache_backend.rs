@@ -7,16 +7,19 @@ use crate::domain::models::storage_models::{EnsureMode, WriteMode};
 use crate::domain::traits::file_cache_traits::{AsyncFileCacheManager, AsyncFileOperator};
 use crate::utils::async_priority_queue::AsyncPriorityQueue;
 use bytes::Bytes;
+use futures_util::SinkExt;
 use parking_lot::{Mutex, RwLock};
 use sea_orm::{ActiveValue, IntoActiveModel};
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync;
+use tokio::sync::{Notify, Semaphore, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -35,7 +38,8 @@ struct QueuedRequest {
     ensure_mode: Option<EnsureMode>,
     add_time: u64,
     priority: RwLock<Priority>,
-    finish_notify: Arc<Notify>,
+    finish_sender: Mutex<Option<oneshot::Sender<()>>>,
+    finish_receiver: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 pub struct FileCacheCoordinator<T: AsyncFileCacheManager> {
@@ -134,6 +138,7 @@ impl FileCacheCoordinator<DefaultAsyncFileCacheManager> {
                 )
                 .await?,
             );
+
             managers.insert(name, manager);
         }
 
@@ -156,6 +161,8 @@ impl DefaultAsyncFileCacheManager {
         let records = CacheService::find_records_by_channel_id(channel.id.clone())
             .await?
             .unwrap_or(Vec::new());
+        let operator = Arc::new(DefaultAsyncFileOperator::new(tokio_runtime));
+        operator.init();
         Ok(Self {
             base_path,
             channel,
@@ -165,16 +172,23 @@ impl DefaultAsyncFileCacheManager {
                     .map(|e| (e.tag.clone(), e))
                     .collect::<Vec<(String, CacheRecordsModel)>>(),
             ))),
-            operator: Arc::new(DefaultAsyncFileOperator::new(tokio_runtime)),
+            operator,
         })
     }
 
     pub fn build_file_path(&self, filename: &String) -> String {
         let extension = self.channel.extension.as_ref();
+        let name = &self.channel.name;
         if extension.is_none() {
-            return format!("{}/{}", self.base_path, filename);
+            return format!("{}/{}/{}", self.base_path, name, filename);
         }
-        format!("{}/{}.{}", self.base_path, filename, extension.unwrap())
+        format!(
+            "{}/{}/{}.{}",
+            self.base_path,
+            name,
+            filename,
+            extension.unwrap()
+        )
     }
 }
 
@@ -189,40 +203,33 @@ impl DefaultAsyncFileOperator {
         }
     }
 
-    async fn write_file(bytes: &QueuedRequest) {
-        let file = OpenOptions::new()
+    async fn ensure_parent_dir_exists(path: &String) -> Result<(), CacheError> {
+        if let Some(parent) = Path::new(path).parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        Ok(())
+    }
+
+    async fn write_file(bytes: &QueuedRequest) -> Result<(), CacheError> {
+        let path = &bytes.path;
+        Self::ensure_parent_dir_exists(path).await?;
+
+        let mut file = OpenOptions::new()
             .create(true)
             .append(bytes.write_mode == WriteMode::Append)
             .write(bytes.write_mode == WriteMode::Cover)
             .open(&bytes.path)
-            .await;
-        if file.is_err() {
-            return;
-        }
-        let mut file = file.unwrap();
-        let result = timeout(Duration::from_secs(60), file.write_all(&bytes.bytes)).await;
-        if result.is_err() {
-            return;
-        }
-        let result = result.unwrap();
-        if result.is_err() {
-            return;
-        }
+            .await?;
+        timeout(Duration::from_secs(60), file.write_all(&bytes.bytes)).await??;
         if bytes.ensure_mode.is_none() {
-            return;
+            return Ok(());
         }
         let ensure_mode = bytes.ensure_mode.as_ref().unwrap();
-        match ensure_mode {
-            EnsureMode::Flush => {
-                let _ = timeout(Duration::from_secs(60), file.flush()).await;
-            }
-            EnsureMode::SyncData => {
-                let _ = timeout(Duration::from_secs(60), file.sync_data()).await;
-            }
-            EnsureMode::SyncAll => {
-                let _ = timeout(Duration::from_secs(60), file.sync_all()).await;
-            }
-        }
+        Ok(match ensure_mode {
+            EnsureMode::Flush => timeout(Duration::from_secs(60), file.flush()).await??,
+            EnsureMode::SyncData => timeout(Duration::from_secs(60), file.sync_data()).await??,
+            EnsureMode::SyncAll => timeout(Duration::from_secs(60), file.sync_all()).await??,
+        })
     }
 
     async fn read_file(path: &String) -> Result<Vec<u8>, CacheError> {
@@ -248,9 +255,14 @@ impl DefaultAsyncFileOperator {
                         let cloned_semaphore = semaphore.clone();
                         tokio::spawn(async move {
                             let _ = cloned_semaphore.acquire().await;
-                            Self::write_file(&request).await;
+                            let _ = Self::write_file(&request).await;
                             cloned_stash.write().remove(&request.path);
-                            request.finish_notify.notify_waiters();
+
+                            let mut finish_sender = request.finish_sender.lock();
+                            if finish_sender.is_some() {
+                                let sender = finish_sender.take().unwrap();
+                                let _ = sender.send(());
+                            }
                         });
                     }
                 })
@@ -290,14 +302,10 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
                 .await;
             return match result {
                 Ok(()) => {
-                    let result = self
-                        .operator
-                        .flush_single(&path, Duration::from_secs(60))
-                        .await;
                     match result {
                         Ok(()) => {
                             let active_model = record.clone().into_active_model();
-                            CacheService::insert_record(active_model).await?;
+                            CacheService::insert_records(vec![active_model]).await?;
                             records.insert(tag, record);
                             Ok(())
                         }
@@ -323,9 +331,6 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
                 WriteMode::Cover,
                 Some(EnsureMode::SyncAll),
             )
-            .await?;
-        self.operator
-            .flush_single(&path, Duration::from_secs(60))
             .await?;
 
         let record = CacheRecordsActiveModel {
@@ -360,6 +365,16 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
         let record = records.get(tag).unwrap();
         let path = self.build_file_path(&record.filename);
         self.operator.read(&path).await
+    }
+
+    async fn ensure_single(&self, tag: &String) -> Result<(), CacheError> {
+        let records = self.records.read();
+        if !records.contains_key(tag) {
+            return Err(CacheError::RecordNotExists(tag.clone()));
+        }
+        let record = records.get(tag).unwrap();
+        let path = self.build_file_path(&record.filename);
+        self.operator.ensure_single(&path, Duration::from_secs(60)).await
     }
 
     async fn persist(&self) -> Result<(), CacheError> {
@@ -399,6 +414,7 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
             .unwrap()
             .as_millis() as u64;
         let key = path.clone();
+        let (finish_sender, finish_receiver) = oneshot::channel::<()>();
         let request = Arc::new(QueuedRequest {
             path,
             bytes,
@@ -406,7 +422,8 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
             ensure_mode,
             add_time: now,
             priority: RwLock::new(Priority::Normal),
-            finish_notify: Arc::new(Notify::new()),
+            finish_sender: Mutex::new(Some(finish_sender)),
+            finish_receiver: Mutex::new(Some(finish_receiver)),
         });
         self.stash.write().insert(key, Arc::downgrade(&request));
         self.queue.push(request).await;
@@ -418,7 +435,7 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
         let stash = self.stash.read();
         let request = stash.get(path);
         if request.is_none() {
-            return Err(CacheError::FileNotSubmitted(path.clone()));
+            return Self::read_file(path).await;
         }
         let request = request.unwrap().upgrade();
         if request.is_none() {
@@ -428,20 +445,27 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
         Ok(request.bytes.clone().to_vec())
     }
 
-    async fn flush_single(&self, path: &String, duration: Duration) -> Result<(), CacheError> {
+    async fn ensure_single(&self, path: &String, duration: Duration) -> Result<(), CacheError> {
         let stash = self.stash.read();
         let request = stash.get(path);
         if request.is_none() {
             return Ok(());
         }
         let request = request.unwrap().upgrade();
+        drop(stash);
         if request.is_none() {
             return Ok(());
         }
         let request = request.unwrap();
         *request.priority.write() = Priority::Flush;
 
-        timeout(duration, request.finish_notify.notified()).await?;
+        let mut finish_receiver = request.finish_receiver.lock();
+        if finish_receiver.is_some() {
+            let receiver = finish_receiver.take().unwrap();
+            timeout(duration, receiver)
+                .await?
+                .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
+        }
 
         Ok(())
     }

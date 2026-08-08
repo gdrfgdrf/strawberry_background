@@ -116,7 +116,7 @@ impl CacheService {
         let transaction = db.begin().await?;
         CacheChannels::insert_many(active_models)
             .on_conflict(
-                OnConflict::columns(["id", "name"])
+                OnConflict::column("id")
                     .update_columns(all_columns!(CacheChannelsColumn))
                     .to_owned(),
             )
@@ -137,6 +137,7 @@ impl CacheService {
         let db = db.as_ref().unwrap();
         let transaction = db.begin().await?;
         let model = active_model.insert(&transaction).await?;
+        transaction.commit().await?;
         Ok(model)
     }
 
@@ -151,7 +152,7 @@ impl CacheService {
         let transaction = db.begin().await?;
         CacheRecords::insert_many(active_models)
             .on_conflict(
-                OnConflict::columns(["id", "tag", "filename"])
+                OnConflict::new()
                     .update_columns(all_columns!(CacheRecordsColumn))
                     .to_owned(),
             )
@@ -169,8 +170,7 @@ impl CacheService {
         }
         let db = db.as_ref().unwrap();
         let transaction = db.begin().await?;
-        CacheRecords::delete_many()
-            .filter(CacheRecordsColumn::Id.eq(id))
+        CacheRecords::delete_by_id(id)
             .exec(&transaction)
             .await?;
         transaction.commit().await?;

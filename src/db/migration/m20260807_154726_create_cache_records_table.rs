@@ -16,9 +16,9 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table("cache_records")
                     .if_not_exists()
-                    .col(big_integer("id"))
-                    .col(text("tag"))
-                    .col(text("filename"))
+                    .col(big_integer("id").primary_key().auto_increment())
+                    .col(text("tag").unique_key())
+                    .col(text("filename").unique_key())
                     .col(text("sentence"))
                     .col(big_integer("channel_id"))
                     .foreign_key(
@@ -28,7 +28,6 @@ impl MigrationTrait for Migration {
                             .to("cache_channels", "id")
                             .on_delete(ForeignKeyAction::Cascade),
                     )
-                    .primary_key(Index::create().col("id").col("tag").col("filename"))
                     .to_owned(),
             )
             .await
