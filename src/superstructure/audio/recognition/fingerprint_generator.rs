@@ -410,7 +410,7 @@ fn build_raw_fingerprint(duration_seconds: f32, peaks: &[Peak]) -> Result<Vec<u8
 }
 
 fn encrypt_raw_fingerprint(raw: &[u8]) -> Result<Vec<u8>, String> {
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(6));
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(0));
     encoder.write_all(raw).map_err(|e| e.to_string())?;
     let mut encrypted = encoder.finish().map_err(|e| e.to_string())?;
 

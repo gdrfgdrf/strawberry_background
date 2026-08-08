@@ -18,8 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
-use tokio::sync;
-use tokio::sync::{Notify, Semaphore, oneshot};
+use tokio::sync::{oneshot, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -301,20 +300,18 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
                 )
                 .await;
             return match result {
-                Ok(()) => {
-                    match result {
-                        Ok(()) => {
-                            let active_model = record.clone().into_active_model();
-                            CacheService::insert_records(vec![active_model]).await?;
-                            records.insert(tag, record);
-                            Ok(())
-                        }
-                        Err(e) => {
-                            CacheService::remove_record_by_id(id).await?;
-                            Err(e)
-                        }
+                Ok(()) => match result {
+                    Ok(()) => {
+                        let active_model = record.clone().into_active_model();
+                        CacheService::insert_records(vec![active_model]).await?;
+                        records.insert(tag, record);
+                        Ok(())
                     }
-                }
+                    Err(e) => {
+                        CacheService::remove_record_by_id(id).await?;
+                        Err(e)
+                    }
+                },
                 Err(e) => {
                     CacheService::remove_record_by_id(id).await?;
                     Err(e)
@@ -374,7 +371,9 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
         }
         let record = records.get(tag).unwrap();
         let path = self.build_file_path(&record.filename);
-        self.operator.ensure_single(&path, Duration::from_secs(60)).await
+        self.operator
+            .ensure_single(&path, Duration::from_secs(60))
+            .await
     }
 
     async fn persist(&self) -> Result<(), CacheError> {
