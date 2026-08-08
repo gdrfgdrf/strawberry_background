@@ -16,9 +16,10 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table("cache_channels")
                     .if_not_exists()
-                    .col(big_integer("id").primary_key().take())
+                    .col(big_integer("id"))
                     .col(text("name"))
                     .col(text_null("extension"))
+                    .primary_key(Index::create().col("id").col("name"))
                     .to_owned(),
             )
             .await
