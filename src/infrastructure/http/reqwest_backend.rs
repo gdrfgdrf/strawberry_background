@@ -2,16 +2,13 @@ use crate::domain::models::cookie_models::{Cookie, SameSite};
 use crate::domain::models::http_models::{
     HttpClientError, HttpEndpoint, HttpMethod, HttpResponse, HttpStreamResponse,
 };
-use crate::domain::models::monitor_models::{EventStage, MonitorEvent, MonitorHttpData, Progress};
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
-use crate::domain::traits::monitor_traits::Monitor;
-use crate::monitor::monitor_service::monitoring;
 use crate::service::config::HttpConfig;
-use crate::utils::progress_reader::{AsyncProgressReader, ProgressReader};
+use crate::utils::progress_reader::AsyncProgressReader;
 use crate::utils::stream_with_callback::StreamCallbackExt;
 use async_trait::async_trait;
-use futures_util::{Stream, StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use reqwest::{Client, Method, Proxy, Response, Url};
 use std::io::ErrorKind;
 use std::sync::Arc;
@@ -19,36 +16,12 @@ use std::time::Duration;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Level, span};
 
-fn send_monitor_event(
-    monitor: Arc<dyn Monitor>,
-    url: &String,
-    stage: EventStage,
-    progress_values: Option<(u64, u64, u64)>,
-) {
-    let mut progress_option: Option<Progress> = None;
-    if progress_values.is_some() {
-        let values = progress_values.unwrap();
-        progress_option = Some(Progress {
-            value: values.0,
-            total: values.1,
-            delta: values.2,
-        })
-    }
-    let monitor_http_data = progress_option.map(|progress| MonitorHttpData { progress });
-    let event = MonitorEvent::Http {
-        stage,
-        url: url.to_string(),
-        data: monitor_http_data,
-    };
-    monitor.send(event);
-}
-
 pub struct ReqwestBackend {
     encryption_provider: Option<Arc<dyn EncryptionProvider>>,
     decryption_provider: Option<Arc<dyn DecryptionProvider>>,
     cookie_store: Option<Arc<dyn CookieStore>>,
     client: Client,
-    _session: tracing::span::Span,
+    _session: span::Span,
 }
 
 impl ReqwestBackend {
@@ -347,16 +320,10 @@ impl HttpClient for ReqwestBackend {
             "executing HTTP"
         );
 
-        let url = endpoint.build_url();
         let requires_decryption = endpoint.requires_decryption;
-
-        monitoring(|monitor| {
-            send_monitor_event(monitor, &url, EventStage::Started, None);
-        });
 
         let response = self.do_execute(endpoint).await.inspect_err(|e| {
             tracing::error!(error = %e, "execute http error");
-            monitoring(|monitor| send_monitor_event(monitor, &url, EventStage::Failed, None));
         })?;
         let status = response.status().as_u16();
         let headers: Vec<(String, String)> = response
@@ -375,26 +342,15 @@ impl HttpClient for ReqwestBackend {
                 .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))
                 .inspect_err(|e| {
                     tracing::error!(error = %e, "read response stream error");
-                    monitoring(|monitor| {
-                        send_monitor_event(monitor, &url, EventStage::Failed, None)
-                    });
                 });
             let async_read = stream.into_async_read();
             let tokio_async_read = async_read.compat();
 
-            let cloned_url = url.clone();
             let mut reader = AsyncProgressReader::new(
                 tokio_async_read,
                 content_length.unwrap(),
-                move |read, total, delta| {
-                    monitoring(|monitor| {
-                        send_monitor_event(
-                            monitor,
-                            &cloned_url,
-                            EventStage::Running,
-                            Some((read, total, delta)),
-                        );
-                    });
+                move |_, _, _| {
+
                 },
             );
             body = Vec::new();
@@ -404,9 +360,7 @@ impl HttpClient for ReqwestBackend {
                 .map_err(|e| HttpClientError::Network(e.to_string()))
                 .inspect_err(|e| {
                     tracing::error!(error = %e, "copy response stream error");
-                    monitoring(|monitor| {
-                        send_monitor_event(monitor, &url, EventStage::Failed, None)
-                    });
+
                 })?;
         } else {
             body = response
@@ -415,16 +369,9 @@ impl HttpClient for ReqwestBackend {
                 .map_err(|e| HttpClientError::Network(e.to_string()))
                 .inspect_err(|e| {
                     tracing::error!(error = %e, "read response error");
-                    monitoring(|monitor| {
-                        send_monitor_event(monitor, &url, EventStage::Failed, None);
-                    });
                 })?
                 .to_vec();
         }
-
-        monitoring(|monitor| {
-            send_monitor_event(monitor, &url, EventStage::Finished, None);
-        });
 
         if requires_decryption {
             body = self.decryption_provider.as_ref().unwrap().decrypt(&body)?;
@@ -450,17 +397,8 @@ impl HttpClient for ReqwestBackend {
             "executing HTTP"
         );
 
-        let url = endpoint.build_url();
-
-        monitoring(|monitor| {
-            send_monitor_event(monitor, &url, EventStage::Started, None);
-        });
-
         let response = self.do_execute(endpoint).await.inspect_err(|e| {
             tracing::error!(error = %e, "execute http error");
-            monitoring(|monitor| {
-                send_monitor_event(monitor, &url, EventStage::Failed, None);
-            });
         })?;
         let status = response.status().as_u16();
         let headers: Vec<(String, String)> = response
@@ -470,7 +408,6 @@ impl HttpClient for ReqwestBackend {
             .collect();
         let content_length = response.content_length();
 
-        let cloned_url = url.clone();
         let stream = response
             .bytes_stream()
             .map_err(|e| HttpClientError::Network(e.to_string()))
@@ -478,24 +415,10 @@ impl HttpClient for ReqwestBackend {
                 tracing::error!(error = %e, "read response stream error");
             })
             .on_complete(move || {
-                monitoring(|monitor| {
-                    send_monitor_event(monitor, &cloned_url, EventStage::Finished, None)
-                })
             });
 
         if content_length.is_some() {
             tracing::debug!(content_length = ?content_length, "preparing response stream");
-            let stream = stream.inspect_ok(move |data| {
-                let length = data.len() as u64;
-                monitoring(|monitor| {
-                    send_monitor_event(
-                        monitor,
-                        &url,
-                        EventStage::Running,
-                        Some((0u64, content_length.unwrap(), length)),
-                    );
-                });
-            });
             let stream = Box::pin(stream);
             return Ok(HttpStreamResponse {
                 status,

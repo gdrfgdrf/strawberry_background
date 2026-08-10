@@ -1,7 +1,6 @@
 pub mod adapters;
 pub mod domain;
 pub mod infrastructure;
-pub mod monitor;
 pub mod rkv;
 pub mod rkyv;
 pub mod service;
