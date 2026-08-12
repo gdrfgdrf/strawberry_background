@@ -260,6 +260,7 @@ impl DefaultAsyncFileOperator {
                             let mut finish_sender = request.finish_sender.lock();
                             if finish_sender.is_some() {
                                 let sender = finish_sender.take().unwrap();
+                                drop(finish_sender);
                                 let _ = sender.send(());
                             }
                         });
@@ -279,6 +280,8 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
         let mut records = self.records.write();
         if records.contains_key(&tag) {
             let record = records.remove(&tag).unwrap();
+            drop(records);
+
             let id = record.id.clone();
             let filename = record.filename.clone();
 
@@ -304,6 +307,7 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
                     Ok(()) => {
                         let active_model = record.clone().into_active_model();
                         CacheService::insert_records(vec![active_model]).await?;
+                        let mut records = self.records.write();
                         records.insert(tag, record);
                         Ok(())
                     }
@@ -318,6 +322,7 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
                 }
             };
         }
+        drop(records);
         let channel_id = self.channel.id.clone();
         let uuid = Uuid::new_v4().to_string();
         let path = self.build_file_path(&uuid);
@@ -338,6 +343,7 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
             channel_id: ActiveValue::Set(channel_id),
         };
         let record = CacheService::insert_record(record).await?;
+        let mut records = self.records.write();
         records.insert(tag, record);
         Ok(())
     }
@@ -361,6 +367,7 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
         }
         let record = records.get(tag).unwrap();
         let path = self.build_file_path(&record.filename);
+        drop(records);
         self.operator.read(&path).await
     }
 
@@ -371,6 +378,7 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
         }
         let record = records.get(tag).unwrap();
         let path = self.build_file_path(&record.filename);
+        drop(records);
         self.operator
             .ensure_single(&path, Duration::from_secs(60))
             .await
@@ -434,9 +442,11 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
         let stash = self.stash.read();
         let request = stash.get(path);
         if request.is_none() {
+            drop(stash);
             return Self::read_file(path).await;
         }
         let request = request.unwrap().upgrade();
+        drop(stash);
         if request.is_none() {
             return Self::read_file(path).await;
         }
@@ -456,11 +466,14 @@ impl AsyncFileOperator for DefaultAsyncFileOperator {
             return Ok(());
         }
         let request = request.unwrap();
-        *request.priority.write() = Priority::Flush;
+        {
+            *request.priority.write() = Priority::Flush;
+        }
 
         let mut finish_receiver = request.finish_receiver.lock();
         if finish_receiver.is_some() {
             let receiver = finish_receiver.take().unwrap();
+            drop(finish_receiver);
             timeout(duration, receiver)
                 .await?
                 .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
@@ -492,6 +505,8 @@ impl Ord for QueuedRequest {
         if *p1 != *p2 {
             return p1.cmp(&p2);
         }
+        drop(p1);
+        drop(p2);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
