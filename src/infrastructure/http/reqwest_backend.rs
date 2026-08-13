@@ -8,9 +8,12 @@ use crate::service::config::HttpConfig;
 use crate::utils::progress_reader::AsyncProgressReader;
 use crate::utils::stream_with_callback::StreamCallbackExt;
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use futures_util::{AsyncWriteExt, TryStreamExt};
 use reqwest::{Client, Method, Proxy, Response, Url};
 use std::io::ErrorKind;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -235,11 +238,16 @@ impl ReqwestBackend {
         let method = Self::convert_method(&endpoint.method);
         let url = endpoint.build_url();
         let mut request_builder = self.client.request(method, &url);
+        let mut gzip_encoding = false;
 
         if endpoint.headers.is_some() {
             let headers = endpoint.headers.unwrap();
             tracing::debug!(header_count = ?headers.len(), "configuring headers");
             for (key, value) in headers {
+                if key.to_lowercase() == "content-encoding" && value == "gzip" {
+                    tracing::debug!("content-encoding is set to gzip");
+                    gzip_encoding = true;
+                }
                 request_builder = request_builder.header(&key, value);
             }
         }
@@ -258,12 +266,26 @@ impl ReqwestBackend {
 
         if endpoint.body.is_some() {
             let body = endpoint.body.unwrap();
-            if endpoint.requires_encryption {
+            let body = if endpoint.requires_encryption {
                 let body = self.encryption_provider.as_ref().unwrap().encrypt(&body)?;
-                request_builder = request_builder.body(body);
+                body
             } else {
-                request_builder = request_builder.body(body);
-            }
+                body
+            };
+            let body = if gzip_encoding {
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(&body).map_err(|e| {
+                    tracing::debug!(length = ?body.len(), error = %e, "writing body with gzip encoder error");
+                    HttpClientError::Crypto(e.to_string())
+                })?;
+                encoder.finish().map_err(|e| {
+                    tracing::debug!(length = ?body.len(), error = %e, "finishing gzip encoder error");
+                    HttpClientError::Crypto(e.to_string())
+                })?
+            } else {
+                body
+            };
+            request_builder = request_builder.body(body);
         }
 
         if self.cookie_store.as_ref().is_some() {
@@ -349,9 +371,7 @@ impl HttpClient for ReqwestBackend {
             let mut reader = AsyncProgressReader::new(
                 tokio_async_read,
                 content_length.unwrap(),
-                move |_, _, _| {
-
-                },
+                move |_, _, _| {},
             );
             body = Vec::new();
 
@@ -360,7 +380,6 @@ impl HttpClient for ReqwestBackend {
                 .map_err(|e| HttpClientError::Network(e.to_string()))
                 .inspect_err(|e| {
                     tracing::error!(error = %e, "copy response stream error");
-
                 })?;
         } else {
             body = response
@@ -414,8 +433,7 @@ impl HttpClient for ReqwestBackend {
             .inspect_err(|e| {
                 tracing::error!(error = %e, "read response stream error");
             })
-            .on_complete(move || {
-            });
+            .on_complete(move || {});
 
         if content_length.is_some() {
             tracing::debug!(content_length = ?content_length, "preparing response stream");
