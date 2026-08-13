@@ -1,4 +1,5 @@
 use crate::domain::models::cookie_models::{Cookie, CookieError, CookieKey};
+use crate::domain::models::storage_models::WriteMode;
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::service::config::CookieConfig;
 use crate::utils::url_component::extract_domain;
@@ -7,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock as AsyncRwLock;
 use tokio::time::timeout;
 use tracing::{Instrument, Level, span};
@@ -121,12 +124,18 @@ impl CookieStore for FileBackedCookieStore {
             })?;
             let content_bytes = json.into_bytes();
             tracing::debug!(content_length = ?content_bytes.len(), "writing json");
-            match timeout(
-                Duration::from_secs(60),
-                tokio::fs::write(path, &content_bytes),
-            )
-            .await
-            {
+
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(false)
+                .write(true)
+                .open(path)
+                .await
+                .map_err(|e| {
+                    tracing::debug!(file = ?path, error = %e, "open file error");
+                    CookieError::IO(e.to_string())
+                })?;
+            match timeout(Duration::from_secs(60), file.write_all(&content_bytes)).await {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(e)) => {
                     tracing::error!(error = %e, "async write error, downgrade to sync write");
@@ -157,18 +166,15 @@ impl CookieStore for FileBackedCookieStore {
                 return Ok(());
             }
 
-            let json = tokio::fs::read_to_string(path)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "read file error");
-                    CookieError::IO(e.to_string())
-                })?;
+            let json = tokio::fs::read_to_string(path).await.map_err(|e| {
+                tracing::error!(error = %e, "read file error");
+                CookieError::IO(e.to_string())
+            })?;
 
-            let serializable: SerializableStore = serde_json::from_str(&json)
-                .map_err(|e| {
-                    tracing::error!(error = %e, "deserialize error");
-                    CookieError::Serialization(e.to_string())
-                })?;
+            let serializable: SerializableStore = serde_json::from_str(&json).map_err(|e| {
+                tracing::error!(error = %e, "deserialize error");
+                CookieError::Serialization(e.to_string())
+            })?;
 
             let now = SystemTime::now();
             let cookies: HashMap<_, _> = serializable
