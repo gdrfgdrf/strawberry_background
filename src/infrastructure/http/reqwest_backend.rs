@@ -1,34 +1,34 @@
-use crate::domain::models::cookie_models::{Cookie, SameSite};
+use crate::db::models::cookies::SameSite;
+use crate::db::models::preclude::{CookieKeysActiveModel, CookiesActiveModel};
 use crate::domain::models::http_models::{
     HttpClientError, HttpEndpoint, HttpMethod, HttpResponse, HttpStreamResponse,
 };
 use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::{DecryptionProvider, EncryptionProvider, HttpClient};
+use crate::infrastructure::http::cookie_backend::DatabaseCookieStore;
 use crate::service::config::HttpConfig;
 use crate::utils::progress_reader::AsyncProgressReader;
 use crate::utils::stream_with_callback::StreamCallbackExt;
-use async_trait::async_trait;
-use flate2::Compression;
-use flate2::write::GzEncoder;
-use futures_util::{AsyncWriteExt, TryStreamExt};
+use chrono::{DateTime, FixedOffset, Utc};
+use futures_util::TryStreamExt;
 use reqwest::{Client, Method, Proxy, Response, Url};
+use sea_orm::ActiveValue;
 use std::io::ErrorKind;
-use std::io::Write;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Level, span};
 
 pub struct ReqwestBackend {
     encryption_provider: Option<Arc<dyn EncryptionProvider>>,
     decryption_provider: Option<Arc<dyn DecryptionProvider>>,
-    cookie_store: Option<Arc<dyn CookieStore>>,
+    cookie_store: DatabaseCookieStore,
     client: Client,
     _session: span::Span,
 }
 
 impl ReqwestBackend {
-    pub fn new() -> Result<Self, HttpClientError> {
+    pub fn new(cookie_store: DatabaseCookieStore) -> Result<Self, HttpClientError> {
         let client = Client::builder()
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(60))
@@ -38,7 +38,7 @@ impl ReqwestBackend {
         Ok(Self {
             encryption_provider: None,
             decryption_provider: None,
-            cookie_store: None,
+            cookie_store,
             client,
             _session: span!(Level::INFO, "reqwest-backend"),
         })
@@ -46,7 +46,7 @@ impl ReqwestBackend {
 
     pub fn with_parameters(
         config: HttpConfig,
-        cookie_store: Option<Arc<dyn CookieStore>>,
+        cookie_store: DatabaseCookieStore,
     ) -> Result<Self, HttpClientError> {
         let _session = span!(Level::INFO, "reqwest-backend");
         let _ = _session.enter();
@@ -119,21 +119,22 @@ impl ReqwestBackend {
 }
 
 impl ReqwestBackend {
+    fn system_time_to_utf8(system_time: Option<SystemTime>) -> Option<DateTime<FixedOffset>> {
+        if system_time.is_none() {
+            return None;
+        }
+
+        let utc: DateTime<Utc> = system_time.unwrap().into();
+        Some(utc.with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap()))
+    }
+
     #[tracing::instrument(skip(self, request_builder), parent = &self._session)]
     async fn inject_cookies(
         &self,
         url: &str,
         request_builder: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder, HttpClientError> {
-        let cookie_store = self.cookie_store.as_ref();
-        if cookie_store.is_none() {
-            tracing::error!("cookie store is not configured");
-            return Err(HttpClientError::Configuration(
-                "Cookie Store is not configured".to_string(),
-            ));
-        }
-        let cookie_store = cookie_store.unwrap();
-        let cookies = cookie_store.get_for_url(url).await;
+        let cookies = self.cookie_store.get_for_url(url).await?;
         if cookies.is_empty() {
             tracing::debug!("cookies is empty");
             return Ok(request_builder);
@@ -142,7 +143,7 @@ impl ReqwestBackend {
         tracing::debug!(cookie_count = %cookies.len(), "preparing cookie headers");
         let cookie_header: String = cookies
             .iter()
-            .map(|c| format!("{}={}", c.key.name, c.value))
+            .map(|(key, value)| format!("{}={}", key.name, value.value))
             .collect::<Vec<_>>()
             .join("; ");
 
@@ -160,15 +161,6 @@ impl ReqwestBackend {
         tracing::debug!(url = %response.url(), "extracting cookies");
 
         if let Some(url) = response.url().host_str() {
-            let cookie_store = self.cookie_store.as_ref();
-            if cookie_store.is_none() {
-                tracing::error!("extract cookies failed: cookie store is not configured");
-                return Err(HttpClientError::Configuration(
-                    "Cookie Store is not configured".to_string(),
-                ));
-            }
-            let cookie_store = cookie_store.unwrap();
-
             for cookie in response.cookies() {
                 let name = cookie.name();
                 let value = cookie.value();
@@ -188,18 +180,28 @@ impl ReqwestBackend {
                     Some(first_same_site)
                 };
 
-                let cookie = Cookie::new(
-                    url.to_string(),
-                    response.url().path().to_string(),
-                    name.to_string(),
-                    value.to_string(),
-                    cookie.expires(),
-                    cookie.secure(),
-                    cookie.http_only(),
-                    same_site,
-                );
+                let now = Self::system_time_to_utf8(Some(SystemTime::now())).unwrap();
+                let key = CookieKeysActiveModel {
+                    id: ActiveValue::NotSet,
+                    path: ActiveValue::Set(response.url().path().to_string()),
+                    name: ActiveValue::Set(name.to_string()),
+                    domain: ActiveValue::Set(url.to_string()),
+                };
+                let value = CookiesActiveModel {
+                    id: ActiveValue::NotSet,
+                    key_id: ActiveValue::NotSet,
+                    value: ActiveValue::Set(value.to_string()),
+                    expires_at: ActiveValue::Set(Self::system_time_to_utf8(cookie.expires())),
+                    created_at: ActiveValue::Set(now.clone()),
+                    last_access_at: ActiveValue::Set(now),
+                    secure: ActiveValue::Set(cookie.secure()),
+                    http_only: ActiveValue::Set(cookie.http_only()),
+                    same_site: ActiveValue::Set(same_site),
+                };
 
-                cookie_store.set(cookie).await;
+                self.cookie_store
+                    .set(key, value, cookie.expires().is_some())
+                    .await?;
             }
         }
 
@@ -238,16 +240,11 @@ impl ReqwestBackend {
         let method = Self::convert_method(&endpoint.method);
         let url = endpoint.build_url();
         let mut request_builder = self.client.request(method, &url);
-        let mut gzip_encoding = false;
 
         if endpoint.headers.is_some() {
             let headers = endpoint.headers.unwrap();
             tracing::debug!(header_count = ?headers.len(), "configuring headers");
             for (key, value) in headers {
-                if key.to_lowercase() == "content-encoding" && value == "gzip" {
-                    tracing::debug!("content-encoding is set to gzip");
-                    gzip_encoding = true;
-                }
                 request_builder = request_builder.header(&key, value);
             }
         }
@@ -272,25 +269,10 @@ impl ReqwestBackend {
             } else {
                 body
             };
-            let body = if gzip_encoding {
-                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                encoder.write_all(&body).map_err(|e| {
-                    tracing::debug!(length = ?body.len(), error = %e, "writing body with gzip encoder error");
-                    HttpClientError::Crypto(e.to_string())
-                })?;
-                encoder.finish().map_err(|e| {
-                    tracing::debug!(length = ?body.len(), error = %e, "finishing gzip encoder error");
-                    HttpClientError::Crypto(e.to_string())
-                })?
-            } else {
-                body
-            };
             request_builder = request_builder.body(body);
         }
 
-        if self.cookie_store.as_ref().is_some() {
-            request_builder = self.inject_cookies(&url, request_builder).await?;
-        }
+        request_builder = self.inject_cookies(&url, request_builder).await?;
 
         let request = request_builder
             .timeout(endpoint.timeout)
@@ -306,15 +288,12 @@ impl ReqwestBackend {
             }
         })?;
 
-        if self.cookie_store.as_ref().is_some() {
-            let _ = self.extract_cookies(&response).await;
-        }
+        self.extract_cookies(&response).await?;
 
         Ok(response)
     }
 }
 
-#[async_trait]
 impl HttpClient for ReqwestBackend {
     fn set_encryption_provider(&mut self, encryption_provider: Arc<dyn EncryptionProvider>) {
         self.encryption_provider = Some(encryption_provider);

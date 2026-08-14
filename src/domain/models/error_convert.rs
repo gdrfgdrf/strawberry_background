@@ -8,8 +8,10 @@ use rodio::source::SeekError;
 use tokio::time::error::Elapsed;
 use crate::db::initializer::DatabaseError;
 use crate::domain::models::audio_models::AudioError;
+use crate::domain::models::cookie_models::CookieError;
 use crate::domain::models::coordinator_models::{CategorizerError, CoordinatorError, DiscoverError, QueuerError, RegistryError};
 use crate::domain::models::file_cache_models::CacheError;
+use crate::domain::models::http_models::HttpClientError;
 use crate::domain::models::storage_models::StorageError;
 use crate::utils::waiter::TimeoutError;
 
@@ -130,6 +132,18 @@ impl From<DecoderError> for AudioError {
 impl From<SeekError> for AudioError {
     fn from(value: SeekError) -> Self {
         AudioError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<DatabaseError> for CookieError {
+    fn from(value: DatabaseError) -> Self {
+        CookieError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<CookieError> for HttpClientError {
+    fn from(value: CookieError) -> Self {
+        HttpClientError::ErrorForward(value.to_string())
     }
 }
 

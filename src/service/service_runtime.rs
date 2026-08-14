@@ -2,16 +2,15 @@ use crate::domain::models::http_models::{
     HttpClientError, HttpEndpoint, HttpResponse, HttpStreamResponse,
 };
 use crate::domain::models::storage_models::{ReadFile, StorageError, WriteFile};
-use crate::domain::traits::cookie_traits::CookieStore;
 use crate::domain::traits::http_traits::HttpClient;
 use crate::domain::traits::storage_traits::StorageManager;
-use crate::infrastructure::http::cookie_backend::FileBackedCookieStore;
+use crate::infrastructure::http::cookie_backend::DatabaseCookieStore;
 use crate::infrastructure::http::reqwest_backend::ReqwestBackend;
 use crate::infrastructure::storage::storage_backend::AsyncStorageManager;
 use crate::service::config::{
     CookieConfig, HttpConfig, RuntimeConfig,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
@@ -35,8 +34,7 @@ pub enum ServiceError {
 
 pub struct ServiceRuntime {
     pub tokio_runtime: Arc<Runtime>,
-    pub http_client: Option<Arc<dyn HttpClient>>,
-    pub cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>>,
+    pub http_client: Option<ReqwestBackend>,
     pub storage_manager: Option<Arc<dyn StorageManager>>,
 }
 
@@ -45,27 +43,8 @@ impl ServiceRuntime {
         config: RuntimeConfig,
         tokio_runtime: Arc<Runtime>,
     ) -> Result<Arc<Self>, InitError> {
-        let cookie_store_initialization =
-            Self::initialize_cookie_store(&tokio_runtime, config.cookie);
-        let optional_cookie_store_initialization: Option<(
-            Arc<dyn CookieStore>,
-            Arc<Mutex<JoinHandle<()>>>,
-        )>;
-        if cookie_store_initialization.is_ok() {
-            optional_cookie_store_initialization = Some(cookie_store_initialization?);
-        } else {
-            optional_cookie_store_initialization = None;
-        }
-
-        let mut cookie_store: Option<Arc<dyn CookieStore>> = None;
-        let mut cookie_auto_save_handle: Option<Arc<Mutex<JoinHandle<()>>>> = None;
-
-        if optional_cookie_store_initialization.is_some() {
-            let cookie_store_initialize = optional_cookie_store_initialization.unwrap();
-            cookie_store = Some(cookie_store_initialize.0);
-            cookie_auto_save_handle = Some(cookie_store_initialize.1);
-        }
-
+        let cookie_store =
+            Self::initialize_cookie_store(&tokio_runtime, config.cookie)?;
         let http_client = if let Some(http_config) = config.http {
             let http_client = Self::create_http_client(http_config, cookie_store)?;
             Some(http_client)
@@ -78,7 +57,6 @@ impl ServiceRuntime {
         Ok(Arc::new(Self {
             tokio_runtime,
             http_client,
-            cookie_auto_save_handle,
             storage_manager: Some(storage_manager),
         }))
     }
@@ -111,27 +89,27 @@ impl ServiceRuntime {
         self.available_runtime().spawn(future)
     }
     
-    pub fn execute_http(
+    pub async fn execute_http(
         &self,
         endpoint: HttpEndpoint,
-    ) -> Result<JoinHandle<Result<HttpResponse, HttpClientError>>, ServiceError> {
+    ) -> Result<Result<HttpResponse, HttpClientError>, ServiceError> {
         if self.http_client.is_none() {
             return Err(ServiceError::NotConfigured("Http Client".to_string()));
         }
-        let client = self.http_client.as_ref().unwrap().clone();
-        Ok(self.execute_async(async move { client.execute(endpoint).await }))
+        let client = self.http_client.as_ref().unwrap();
+        Ok(client.execute(endpoint).await)
     }
 
-    pub fn execute_stream_http(
+    pub async fn execute_stream_http(
         &self,
         endpoint: HttpEndpoint,
-    ) -> Result<JoinHandle<Result<HttpStreamResponse, HttpClientError>>, ServiceError> {
+    ) -> Result<Result<HttpStreamResponse, HttpClientError>, ServiceError> {
         if self.http_client.is_none() {
             return Err(ServiceError::NotConfigured("Http Client".to_string()));
         }
 
-        let client = self.http_client.as_ref().unwrap().clone();
-        Ok(self.execute_async(async move { client.execute_stream(endpoint).await }))
+        let client = self.http_client.as_ref().unwrap();
+        Ok(client.execute_stream(endpoint).await)
     }
 
     pub async fn read_file(
@@ -165,7 +143,7 @@ impl ServiceRuntime {
     fn initialize_cookie_store(
         tokio_runtime: &Runtime,
         config: Option<CookieConfig>,
-    ) -> Result<(Arc<dyn CookieStore>, Arc<Mutex<JoinHandle<()>>>), InitError> {
+    ) -> Result<DatabaseCookieStore, InitError> {
         let cookie_store_option = if let Some(cookie_config) = config {
             Some(tokio_runtime.block_on(async {
                 let cookie_store = Self::create_cookie_store(cookie_config).await?;
@@ -185,45 +163,26 @@ impl ServiceRuntime {
             return Err(InitError::Configuration("cookie store is null".to_string()));
         };
 
-        let cookie_auto_save_handle = if let Some(cookie_store) = &cookie_store {
-            let unwrapped = cookie_store.clone();
-            let file_backend_cookie_store = unwrapped.downcast_arc::<FileBackedCookieStore>();
-            if let Some(file_backend_cookie_store) = file_backend_cookie_store {
-                let handle =
-                    tokio_runtime.block_on(async { file_backend_cookie_store.start_auto_save() });
-
-                Some(Arc::new(Mutex::new(handle)))
-            } else {
-                return Err(InitError::Configuration(
-                    "file cookie store is null".to_string(),
-                ));
-            }
-        } else {
-            return Err(InitError::Configuration("cookie store is null".to_string()));
-        };
-
-        Ok((cookie_store.unwrap(), cookie_auto_save_handle.unwrap()))
+        Ok(cookie_store.unwrap())
     }
 
     async fn create_cookie_store(
         cookie_config: CookieConfig,
-    ) -> Result<Arc<dyn CookieStore>, InitError> {
-        let store = FileBackedCookieStore::new(cookie_config)
+    ) -> Result<DatabaseCookieStore, InitError> {
+        let store = DatabaseCookieStore::new(cookie_config)
             .await
             .map_err(|e| InitError::Configuration(e.to_string()))?;
-
-        let store = Arc::new(store);
         Ok(store)
     }
 
     fn create_http_client(
         http_config: HttpConfig,
-        cookie_store: Option<Arc<dyn CookieStore>>,
-    ) -> Result<Arc<dyn HttpClient>, InitError> {
+        cookie_store: DatabaseCookieStore,
+    ) -> Result<ReqwestBackend, InitError> {
         let backend = ReqwestBackend::with_parameters(http_config, cookie_store)
             .map_err(|e| InitError::HttpClientInit(e.to_string()))?;
 
-        Ok(Arc::new(backend))
+        Ok(backend)
     }
 
     fn create_storage_manager() -> Result<Arc<dyn StorageManager>, InitError> {

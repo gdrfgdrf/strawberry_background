@@ -5,8 +5,7 @@ use async_trait::async_trait;
 use futures_util::Stream;
 use std::sync::Arc;
 
-#[async_trait]
-pub trait HttpClient: Send + Sync + 'static {
+pub trait HttpClient {
     fn set_encryption_provider(&mut self, encryption_provider: Arc<dyn EncryptionProvider>);
     fn set_decryption_provider(&mut self, decryption_provider: Arc<dyn DecryptionProvider>);
 

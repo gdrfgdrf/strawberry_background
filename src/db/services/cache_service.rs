@@ -53,13 +53,13 @@ impl CacheService {
             .filter(CacheChannelsColumn::Name.is_in(&names))
             .all(db)
             .await?;
-        let map = channels
+        let mut map = channels
             .into_iter()
             .map(|channel| (channel.name.clone(), channel))
             .collect::<HashMap<String, CacheChannelsModel>>();
         let ordered = names
             .into_iter()
-            .map(|name| map.get(&name).cloned())
+            .map(|name| map.remove(&name))
             .collect::<Vec<Option<CacheChannelsModel>>>();
 
         Ok(Some(ordered))

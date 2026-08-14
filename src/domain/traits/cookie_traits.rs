@@ -1,33 +1,20 @@
 use std::any::Any;
 use std::sync::Arc;
-use async_trait::async_trait;
-use crate::domain::models::cookie_models::{Cookie, CookieError, CookieKey};
+use crate::db::models::preclude::{CookieKeysActiveModel, CookieKeysModel, CookiesActiveModel, CookiesModel};
+use crate::domain::models::cookie_models::CookieError;
 
-impl dyn CookieStore {
-    pub fn downcast_arc<T: CookieStore>(self: Arc<Self>) -> Option<Arc<T>> {
-        let any_arc = self as Arc<dyn Any>;
-        if any_arc.is::<T>() {
-            let raw_ptr = Arc::into_raw(any_arc) as *const T;
-            Some(unsafe { Arc::from_raw(raw_ptr) })
-        } else {
-            None
-        }
-    }
-}
+pub trait CookieStore {
+    async fn get(&self, key: &CookieKeysModel) -> Result<Option<CookiesModel>, CookieError>;
 
-#[async_trait]
-pub trait CookieStore: Any + Send + Sync + 'static {
-    async fn get(&self, key: &CookieKey) -> Option<Cookie>;
+    async fn set(&self, key: CookieKeysActiveModel, cookie: CookiesActiveModel, persistent: bool) -> Result<(), CookieError>;
 
-    async fn set(&self, cookie: Cookie);
+    async fn remove(&self, key: &CookieKeysModel) -> Result<(), CookieError>;
 
-    async fn remove(&self, key: &CookieKey);
+    async fn get_for_domain(&self, domain: &str) -> Result<Vec<(CookieKeysModel, CookiesModel)>, CookieError>;
 
-    async fn get_for_domain(&self, domain: &str) -> Vec<Cookie>;
+    async fn get_for_url(&self, url: &str) -> Result<Vec<(CookieKeysModel, CookiesModel)>, CookieError>;
 
-    async fn get_for_url(&self, url: &str) -> Vec<Cookie>;
-
-    async fn clear_all(&self);
+    async fn clear_all(&self) -> Result<(), CookieError>;
 
     async fn persist(&self) -> Result<(), CookieError>;
 

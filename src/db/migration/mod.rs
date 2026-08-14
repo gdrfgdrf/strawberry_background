@@ -1,2 +1,5 @@
-pub mod migrator;mod m20260807_154717_create_cache_channels_table;
+mod m20260807_154717_create_cache_channels_table;
 mod m20260807_154726_create_cache_records_table;
+mod m20260814_070046_create_cookie_keys_table;
+mod m20260814_070053_create_cookies_table;
+pub mod migrator;

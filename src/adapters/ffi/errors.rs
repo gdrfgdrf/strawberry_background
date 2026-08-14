@@ -2,6 +2,8 @@ use crate::domain::models::http_models::HttpClientError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FfiAdapterError {
+    #[error("Error Forward: {0}")]
+    ErrorForward(String),
     #[error("Parameter error: {0}")]
     InvalidParameter(String),
     #[error("Domain error: {0}")]
@@ -15,6 +17,9 @@ pub enum FfiAdapterError {
 impl FfiAdapterError {
     pub fn from_domain_error(err: HttpClientError) -> Self {
         match err {
+            HttpClientError::ErrorForward(msg) => {
+                FfiAdapterError::ErrorForward(msg)
+            }
             HttpClientError::Network(msg) => {
                 FfiAdapterError::DomainError(format!("Network: {}", msg))
             }

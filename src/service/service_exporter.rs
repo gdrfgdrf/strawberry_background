@@ -1,4 +1,3 @@
-use crate::domain::traits::monitor_traits::Monitor;
 use crate::service::config::RuntimeConfig;
 use crate::service::service_runtime::{InitError, ServiceRuntime};
 use std::sync::Arc;
@@ -39,7 +38,7 @@ mod tests {
     };
     use crate::rkv::rkv_impl::initialize_rkv;
     use crate::service::config::{
-        CookieConfig, FileCacheChannelConfig, FileCacheConfig, HttpConfig, RuntimeConfig,
+        CookieConfig, HttpConfig, RuntimeConfig,
     };
     use crate::service::service_exporter::create_service_exporter_with_tokio_runtime;
     use crate::service::service_runtime::ServiceRuntime;
@@ -64,11 +63,6 @@ mod tests {
 
         let service_exporter = create_service_exporter_with_tokio_runtime(
             RuntimeConfig {
-                // tokio: TokioConfig {
-                //     worker_threads: Some(4),
-                //     thread_stack_size: None,
-                //     thread_name_prefix: Some("strawberry-background-worker".to_string()),
-                // },
                 http: Some(HttpConfig {
                     connect_timeout: Duration::from_secs(10),
                     request_timeout: Duration::from_secs(30),
@@ -83,9 +77,6 @@ mod tests {
                     tls_danger_accept_invalid_hostnames: false,
                 }),
                 cookie: Some(CookieConfig {
-                    cookie_path: Some("test_cookie.json".to_string()),
-                    debounce_delay: Duration::from_secs(10),
-                    auto_save_interval: Some(Duration::from_secs(60)),
                     initial_cookies: None,
                 }),
             },
@@ -94,81 +85,6 @@ mod tests {
         .unwrap();
         let runtime = service_exporter.runtime;
         runtime
-    }
-
-    #[test]
-    fn test_http() {
-        let runtime = initialize_runtime();
-        let response = await_test!(
-            runtime
-                .execute_http(HttpEndpoint {
-                    path: "/search".to_string(),
-                    domain: "https://cn.bing.com".to_string(),
-                    body: None,
-                    timeout: Duration::from_secs(60),
-                    headers: None,
-                    path_params: None,
-                    query_params: Some(vec![("q".to_string(), "netease".to_string())]),
-                    method: HttpMethod::Get,
-                    requires_encryption: false,
-                    requires_decryption: false,
-                    user_agent: None,
-                    content_type: None,
-                })
-                .unwrap()
-        )
-        .unwrap()
-        .unwrap();
-
-        println!("response length: {}", response.body.len());
-
-        // /// test cookie store
-        // await_test!(async { loop {} });
-    }
-
-    #[test]
-    fn test_storage() {
-        let runtime = initialize_runtime();
-
-        let mut write_costs: Vec<f32> = Vec::new();
-        let mut read_costs: Vec<f32> = Vec::new();
-        for _ in 0..1000 {
-            let path = "storage_test.txt".to_string();
-            let data = "http world, this is the storage test\n"
-                .repeat(10086 ^ 2)
-                .to_string()
-                .into_bytes();
-
-            let current_time = SystemTime::now();
-            let _ = await_test!(runtime.write_file(WriteFile {
-                path: path.clone(),
-                data: &data,
-                mode: WriteMode::Cover,
-                timeout: Duration::from_secs(60),
-                ensure_mode: Some(EnsureMode::SyncAll)
-            }))
-            .unwrap()
-            .unwrap();
-
-            write_costs.push(current_time.elapsed().unwrap().as_millis() as f32);
-
-            let current_time = SystemTime::now();
-            let read_data = await_test!(runtime.read_file(ReadFile::path(path)))
-                .unwrap()
-                .unwrap();
-
-            read_costs.push(current_time.elapsed().unwrap().as_millis() as f32);
-
-            assert_eq!(read_data.len(), data.len())
-        }
-
-        let write_sum: f32 = write_costs.iter().sum();
-        let write_average = write_sum / write_costs.len() as f32;
-        println!("write average: {:?}ms", write_average);
-
-        let read_sum: f32 = read_costs.iter().sum();
-        let read_average = read_sum / read_costs.len() as f32;
-        println!("read average: {:?}ms", read_average);
     }
 
     #[test]

@@ -44,6 +44,8 @@ pub struct HttpStreamResponse {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpClientError {
+    #[error("Error Forward: {0}")]
+    ErrorForward(String),
     #[error("Network error: {0}")]
     Network(String),
     #[error("Timeout after {0:?}")]

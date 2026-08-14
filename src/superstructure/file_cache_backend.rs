@@ -1,7 +1,7 @@
 use crate::db::models::preclude::{
     CacheChannelsActiveModel, CacheChannelsModel, CacheRecordsActiveModel, CacheRecordsModel,
 };
-use crate::db::services::cache_services::CacheService;
+use crate::db::services::cache_service::CacheService;
 use crate::domain::models::file_cache_models::CacheError;
 use crate::domain::models::storage_models::{EnsureMode, WriteMode};
 use crate::domain::traits::file_cache_traits::{AsyncFileCacheManager, AsyncFileOperator};

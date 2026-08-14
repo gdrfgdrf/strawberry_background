@@ -21,7 +21,6 @@ impl ServiceFfiAdapter {
         let domain_response = self
             .runtime
             .execute_http(domain_endpoint)
-            .map_err(|e| e.to_string())?
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
@@ -37,7 +36,6 @@ impl ServiceFfiAdapter {
         let domain_response = self
             .runtime
             .execute_stream_http(domain_endpoint)
-            .map_err(|e| e.to_string())?
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
