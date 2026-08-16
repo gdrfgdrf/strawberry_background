@@ -1,4 +1,3 @@
-use std::fmt::Debug;
 use crate::domain::models::audio_models::{AudioError, AudioRecordSource};
 use crate::domain::traits::audio_traits::AudioRecorderBackend;
 #[cfg(target_os = "android")]
@@ -15,17 +14,22 @@ use jni::JNIEnv;
 #[cfg(target_os = "android")]
 use jni::objects::GlobalRef;
 use parking_lot::{Mutex, RwLock};
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
 #[cfg(target_os = "android")]
 use std::time::Duration;
+#[cfg(target_os = "android")]
+use jni::AttachGuard;
 use tokio::sync::mpsc;
+use tokio::sync::watch::{Sender, channel};
 #[cfg(target_os = "android")]
 use tokio::task::AbortHandle;
 use tokio::task::spawn_blocking;
-use tracing::{span, Level};
+use tokio_stream::wrappers::WatchStream;
+use tracing::{Level, span};
 
 #[derive(Debug)]
 struct RecordingStateInner {
@@ -55,7 +59,7 @@ impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
             backend,
             state: Arc::new(Mutex::new(RecorderState::Idle)),
             disposed: AtomicBool::new(false),
-            _session: span
+            _session: span,
         }
     }
 
@@ -94,7 +98,7 @@ impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
             _ => {
                 tracing::error!(state = ?*guard, "recorder not idle");
                 Err(AudioError::AlreadyRecording)
-            },
+            }
         }
     }
 
@@ -238,7 +242,7 @@ impl<S> Drop for RecordingStream<S> {
 #[derive(Debug)]
 pub struct DesktopAudioRecorderBackend {
     recoder: RwLock<Option<Recorder>>,
-    _session: span::Span
+    _session: span::Span,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -246,7 +250,7 @@ impl DesktopAudioRecorderBackend {
     pub fn new() -> DesktopAudioRecorderBackend {
         DesktopAudioRecorderBackend {
             recoder: RwLock::new(Some(Recorder::new())),
-            _session: span!(Level::INFO, "desktop-audio-recorder-backend")
+            _session: span!(Level::INFO, "desktop-audio-recorder-backend"),
         }
     }
 
@@ -369,6 +373,7 @@ impl AudioRecorderBackend for DesktopAudioRecorderBackend {
 
 #[cfg(target_os = "android")]
 pub struct AndroidAudioRecorderBackend<'local> {
+    guard: AttachGuard<'local>,
     env: RwLock<Option<JNIEnv<'local>>>,
     context: GlobalRef,
     mic: RwLock<Option<Arc<AudioMicrophone>>>,
@@ -377,8 +382,9 @@ pub struct AndroidAudioRecorderBackend<'local> {
 
 #[cfg(target_os = "android")]
 impl<'local> AndroidAudioRecorderBackend<'local> {
-    pub fn new(env: JNIEnv<'local>, context: GlobalRef) -> AndroidAudioRecorderBackend {
+    pub fn new(guard: AttachGuard<'local>, env: JNIEnv<'local>, context: GlobalRef) -> AndroidAudioRecorderBackend {
         Self {
+            guard,
             env: RwLock::new(Some(env)),
             context,
             mic: RwLock::new(None),
@@ -389,7 +395,13 @@ impl<'local> AndroidAudioRecorderBackend<'local> {
 
 #[cfg(target_os = "android")]
 impl<'local> AudioRecorderBackend for AndroidAudioRecorderBackend<'local> {
-    fn start(&self, source: AudioRecordSource) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
+    fn start(
+        &self,
+        source: AudioRecordSource,
+        sample_rate: Option<u32>,
+        channels: Option<u16>,
+        sample_size: Option<u32>,
+    ) -> Result<impl Stream<Item = Vec<f32>>, AudioError> {
         match source {
             AudioRecordSource::Mic => {
                 let mut env = self.env.write();
@@ -397,11 +409,48 @@ impl<'local> AudioRecorderBackend for AndroidAudioRecorderBackend<'local> {
                     return Err(AudioError::JNIEnvironmentRequired);
                 }
 
+                let sample_rate = match sample_rate {
+                    None => SampleRate::Rate8000,
+                    Some(sample_rate) => {
+                        if sample_rate == 8000 {
+                            SampleRate::Rate8000
+                        } else {
+                            if sample_rate == 16000 {
+                                SampleRate::Rate16000
+                            } else {
+                                if sample_rate == 22050 {
+                                    SampleRate::Rate22050
+                                } else {
+                                    if sample_rate == 44100 {
+                                        SampleRate::Rate44100
+                                    } else {
+                                        if sample_rate == 48000 {
+                                            SampleRate::Rate48000
+                                        } else {
+                                            SampleRate::Rate8000
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
                 let mic = Arc::new(AudioMicrophone::new(
                     env.take().unwrap(),
                     &self.context,
-                    SampleRate::Rate44100,
-                    ChannelInConfig::Stereo,
+                    sample_rate,
+                    channels
+                        .map(|channels| {
+                            if channels == 1 {
+                                return ChannelInConfig::Mono;
+                            }
+                            if channels == 2 {
+                                return ChannelInConfig::Stereo;
+                            }
+                            ChannelInConfig::Mono
+                        })
+                        .unwrap_or(ChannelInConfig::Mono),
                     AudioEncoding::PcmFloat,
                 )?);
                 mic.start()?;
