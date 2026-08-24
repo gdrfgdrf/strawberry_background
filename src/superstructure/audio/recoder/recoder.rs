@@ -23,6 +23,8 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 #[cfg(target_os = "android")]
 use jni::AttachGuard;
+#[cfg(target_os = "android")]
+use jni::JavaVM;
 use tokio::sync::mpsc;
 use tokio::sync::watch::{Sender, channel};
 #[cfg(target_os = "android")]
@@ -45,14 +47,14 @@ enum RecorderState {
 }
 
 #[derive(Debug)]
-pub struct AudioRecorder<T: AudioRecorderBackend + Debug> {
+pub struct AudioRecorder<T: AudioRecorderBackend> {
     backend: T,
     state: Arc<Mutex<RecorderState>>,
     disposed: AtomicBool,
     _session: span::Span,
 }
 
-impl<T: AudioRecorderBackend + Debug> AudioRecorder<T> {
+impl<T: AudioRecorderBackend> AudioRecorder<T> {
     pub fn new(backend: T) -> Self {
         let span = span!(Level::INFO, "audio_recorder");
         Self {
@@ -372,18 +374,20 @@ impl AudioRecorderBackend for DesktopAudioRecorderBackend {
 }
 
 #[cfg(target_os = "android")]
-pub struct AndroidAudioRecorderBackend<'local> {
-    guard: AttachGuard<'local>,
-    env: RwLock<Option<JNIEnv<'local>>>,
+pub struct AndroidAudioRecorderBackend<'a> {
+    vm: JavaVM,
+    guard: AttachGuard<'a>,
+    env: RwLock<Option<JNIEnv<'a>>>,
     context: GlobalRef,
     mic: RwLock<Option<Arc<AudioMicrophone>>>,
     mic_stream: RwLock<Option<Arc<AudioMicrophoneStream>>>,
 }
 
 #[cfg(target_os = "android")]
-impl<'local> AndroidAudioRecorderBackend<'local> {
-    pub fn new(guard: AttachGuard<'local>, env: JNIEnv<'local>, context: GlobalRef) -> AndroidAudioRecorderBackend {
+impl<'a> AndroidAudioRecorderBackend<'a> {
+    pub fn new(vm: JavaVM, guard: AttachGuard<'a>, env: JNIEnv<'a>, context: GlobalRef) -> AndroidAudioRecorderBackend<'a> {
         Self {
+            vm,
             guard,
             env: RwLock::new(Some(env)),
             context,
@@ -394,7 +398,7 @@ impl<'local> AndroidAudioRecorderBackend<'local> {
 }
 
 #[cfg(target_os = "android")]
-impl<'local> AudioRecorderBackend for AndroidAudioRecorderBackend<'local> {
+impl<'a> AudioRecorderBackend for AndroidAudioRecorderBackend<'a> {
     fn start(
         &self,
         source: AudioRecordSource,

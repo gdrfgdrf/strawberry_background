@@ -3,8 +3,6 @@ use crate::domain::models::coordinator_models::{
     RunnerStatus,
 };
 use crate::domain::traits::coordinator_traits::{Runner, RunnerWatcher};
-use async_trait::async_trait;
-use bytes::Bytes;
 use parking_lot::{Mutex, RwLock};
 use rand::RngExt;
 use rand::rngs::SmallRng;
@@ -20,22 +18,20 @@ pub enum BaseRunnerError {
     ConcurrencyLimitation,
 }
 
-#[async_trait]
-pub trait SimpleRunner: Send + Sync {
-    async fn submit(&self, request: &Request, tracker: &RunnerTracker) -> Result<(), RunnerError>;
+pub trait SimpleRunner {
+    async fn submit<Watcher: RunnerWatcher>(
+        &self,
+        request: &Request,
+        watcher: &Watcher,
+    ) -> Result<(), RunnerError>;
 }
 
-pub struct BaseRunner {
+pub struct BaseRunner<Runner: SimpleRunner> {
     tokio_runtime: Arc<Runtime>,
     identifier: Identifier,
     configuration: RunnerConfiguration,
-    inner: Arc<dyn SimpleRunner>,
+    inner: Arc<Runner>,
     status_manager: Arc<StatusManager>,
-}
-
-pub struct RunnerTracker {
-    watcher: Arc<dyn RunnerWatcher>,
-    on_finished: Box<dyn FnOnce() + Send + Sync>,
 }
 
 struct StatusManager {
@@ -44,19 +40,19 @@ struct StatusManager {
     ongoing_request_count: AtomicUsize,
 }
 
-struct RequestRetryer {
-    inner: Arc<dyn SimpleRunner>,
+struct RequestRetryer<Runner: SimpleRunner, Watcher: RunnerWatcher> {
+    inner: Arc<Runner>,
     request: Request,
-    tracker: RunnerTracker,
+    watcher: Watcher,
     retry_count: Mutex<usize>,
 }
 
-impl BaseRunner {
+impl<Runner: SimpleRunner> BaseRunner<Runner> {
     pub fn new(
         tokio_runtime: Arc<Runtime>,
         identifier: Identifier,
         configuration: RunnerConfiguration,
-        inner: Arc<dyn SimpleRunner>,
+        inner: Runner,
         max_concurrency_count: usize,
     ) -> Self {
         let status_manager = Arc::new(StatusManager::new(max_concurrency_count));
@@ -64,13 +60,13 @@ impl BaseRunner {
             tokio_runtime,
             identifier,
             configuration,
-            inner,
+            inner: Arc::new(inner),
             status_manager,
         }
     }
 }
 
-impl Runner for BaseRunner {
+impl<RunnerA: SimpleRunner> Runner for BaseRunner<RunnerA> {
     fn identifier(&self) -> &Identifier {
         &self.identifier
     }
@@ -87,7 +83,11 @@ impl Runner for BaseRunner {
         })
     }
 
-    fn submit(&self, request: Request, watcher: Arc<dyn RunnerWatcher>) -> Result<(), RunnerError> {
+    async fn submit<Watcher: RunnerWatcher>(
+        &self,
+        request: Request,
+        watcher: Watcher,
+    ) -> Result<(), RunnerError> {
         if !self.status_manager.allow_submission() {
             return Err(RunnerError::ErrorForward(
                 BaseRunnerError::ConcurrencyLimitation.to_string(),
@@ -98,42 +98,13 @@ impl Runner for BaseRunner {
         status_manager.increase_count();
         status_manager.update_status();
 
-        let tracker = RunnerTracker::new(
-            watcher,
-            Box::new(move || {
-                status_manager.decrease_count();
-                status_manager.update_status();
-            }),
-        );
-        self.tokio_runtime.spawn(async move {
-            let retryer = RequestRetryer::new(inner, request, tracker);
-            retryer.start().await;
-        });
+        let retryer = RequestRetryer::new(inner, request, watcher);
+        retryer.start().await;
+
+        status_manager.decrease_count();
+        status_manager.update_status();
 
         Ok(())
-    }
-}
-
-impl RunnerTracker {
-    fn new(watcher: Arc<dyn RunnerWatcher>, on_finished: Box<dyn FnOnce() + Send + Sync>) -> Self {
-        Self {
-            watcher,
-            on_finished,
-        }
-    }
-
-    pub fn on_result(self, bytes: Option<Bytes>) {
-        self.watcher.on_result(bytes);
-        (self.on_finished)();
-    }
-
-    pub fn on_error(self, err: RunnerError) {
-        self.watcher.on_error(err);
-        (self.on_finished)();
-    }
-
-    pub fn on_progress(&self, value: u64, total: Option<u64>) {
-        self.watcher.on_progress(value, total);
     }
 }
 
@@ -189,12 +160,12 @@ impl StatusManager {
     }
 }
 
-impl RequestRetryer {
-    pub fn new(inner: Arc<dyn SimpleRunner>, request: Request, tracker: RunnerTracker) -> Self {
+impl<Runner: SimpleRunner, Watcher: RunnerWatcher> RequestRetryer<Runner, Watcher> {
+    pub fn new(inner: Arc<Runner>, request: Request, watcher: Watcher) -> Self {
         Self {
             inner,
             request,
-            tracker,
+            watcher,
             retry_count: Mutex::new(0),
         }
     }
@@ -261,7 +232,7 @@ impl RequestRetryer {
 
     pub async fn start(&self) {
         loop {
-            let result = self.inner.submit(&self.request, &self.tracker).await;
+            let result = self.inner.submit(&self.request, &self.watcher).await;
             if result.is_ok() {
                 return;
             }

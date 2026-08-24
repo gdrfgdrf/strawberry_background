@@ -46,12 +46,14 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
             ty = strip_single_wrapper(ty, "Mutex").unwrap();
         }
         let is_option = is_wrapper(ty, "Option");
+        let (_, ty_generics, _) = a_struct.generics.split_for_impl();
         if is_option {
             let ty = strip_single_wrapper(ty, "Option").unwrap();
             let set_function_ident = format_ident!("set_{}", ident);
             let take_function_ident = format_ident!("take_{}", ident);
 
             let is_vec = is_wrapper(ty, "Vec");
+
             if is_mutex {
                 if is_vec {
                     let ty = strip_single_wrapper(ty, "Vec").unwrap();
@@ -59,7 +61,7 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
                     let clear_function_ident = format_ident!("clear_{}", ident);
 
                     type_tokens.push(quote! {
-                        pub fn #push_function_ident(&self, item: #ty) -> &#struct_ident {
+                        pub fn #push_function_ident(&self, item: #ty) -> &#struct_ident #ty_generics {
                             let mut lock = self.#ident.lock();
                             if lock.is_none() {
                                 *lock = Some(Vec::new());
@@ -69,7 +71,7 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
                             self
                         }
 
-                        pub fn #clear_function_ident(&self) -> &#struct_ident {
+                        pub fn #clear_function_ident(&self) -> &#struct_ident #ty_generics {
                             let mut lock = self.#ident.lock();
                             if lock.is_none() {
                                 return self;
@@ -82,7 +84,7 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
                 }
 
                 type_tokens.push(quote! {
-                    pub fn #set_function_ident(&self, #ident: #ty) -> &#struct_ident {
+                    pub fn #set_function_ident(&self, #ident: #ty) -> &#struct_ident #ty_generics {
                         let mut lock = self.#ident.lock();
                         *lock = Some(#ident);
                         self
@@ -133,7 +135,7 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
                 }
 
                 type_tokens.push(quote! {
-                    pub fn #set_function_ident(&mut self, #ident: #ty) -> &#struct_ident {
+                    pub fn #set_function_ident(&mut self, #ident: #ty) -> &#struct_ident #ty_generics {
                         self.#ident = Some(#ident);
                         self
                     }
@@ -173,12 +175,12 @@ pub fn builder(_: TokenStream, item: TokenStream) -> TokenStream {
             let clear_function_ident = format_ident!("clear_{}", ident);
 
             type_tokens.push(quote! {
-                pub fn #push_function_ident(&mut self, item: #ty) -> &#struct_ident {
+                pub fn #push_function_ident(&mut self, item: #ty) -> &#struct_ident #ty_generics {
                     self.#ident.push(item);
                     self
                 }
 
-                pub fn #clear_function_ident(&mut self) -> &#struct_ident {
+                pub fn #clear_function_ident(&mut self) -> &#struct_ident #ty_generics {
                     self.#ident.clear();
                     self
                 }

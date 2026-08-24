@@ -43,11 +43,11 @@ pub struct RequestBuilder {
 }
 
 #[builder]
-pub struct BaseRunnerBuilder {
+pub struct BaseRunnerBuilder<Runner: SimpleRunner> {
     pub tokio_runtime: Arc<Runtime>,
     pub identifier: Identifier,
     pub configuration_builder: RunnerConfigurationBuilder,
-    pub inner: Arc<dyn SimpleRunner>,
+    pub inner: Runner,
     pub max_concurrency_count: Mutex<Option<usize>>,
 }
 
@@ -97,8 +97,8 @@ impl RequestBuilder {
     }
 }
 
-impl BaseRunnerBuilder {
-    pub fn build(self) -> BaseRunner {
+impl<Runner: SimpleRunner> BaseRunnerBuilder<Runner> {
+    pub fn build(self) -> BaseRunner<Runner> {
         let max_concurrency_count = self.take_max_concurrency_count().unwrap_or(1);
         let tokio_runtime = self.tokio_runtime;
         let identifier = self.identifier;

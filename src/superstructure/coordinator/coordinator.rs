@@ -42,8 +42,8 @@ pub struct DefaultQueuer {
     listener_manager: Arc<dyn ProgressListenerManager>,
 }
 
-pub struct DefaultRunnerWatcher {
-    runner: Arc<dyn Runner>,
+pub struct DefaultRunnerWatcher<RunnerA: Runner> {
+    runner: RunnerA,
     identifier: Identifier,
     listener_manager: Arc<dyn ProgressListenerManager>,
 }
@@ -416,9 +416,9 @@ impl Queuer for DefaultQueuer {
     }
 }
 
-impl DefaultRunnerWatcher {
+impl<RunnerA: Runner> DefaultRunnerWatcher<RunnerA> {
     pub fn new(
-        runner: Arc<dyn Runner>,
+        runner: RunnerA,
         identifier: Identifier,
         listener_manager: Arc<dyn ProgressListenerManager>,
     ) -> Self {
@@ -443,7 +443,7 @@ impl DefaultRunnerWatcher {
     }
 }
 
-impl RunnerWatcher for DefaultRunnerWatcher {
+impl<RunnerA: Runner> RunnerWatcher for DefaultRunnerWatcher<RunnerA> {
     fn on_result(&self, bytes: Option<Bytes>) {
         self.notify_success();
 

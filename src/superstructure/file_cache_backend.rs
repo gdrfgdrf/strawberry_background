@@ -7,7 +7,6 @@ use crate::domain::models::storage_models::{EnsureMode, WriteMode};
 use crate::domain::traits::file_cache_traits::{AsyncFileCacheManager, AsyncFileOperator};
 use crate::utils::async_priority_queue::AsyncPriorityQueue;
 use bytes::Bytes;
-use futures_util::SinkExt;
 use parking_lot::{Mutex, RwLock};
 use sea_orm::{ActiveValue, IntoActiveModel};
 use std::cmp::Ordering;
@@ -49,6 +48,7 @@ pub struct DefaultAsyncFileCacheManager {
     base_path: String,
 
     channel: CacheChannelsModel,
+    pending_records: RwLock<HashMap<String, Weak<Semaphore>>>,
     records: Arc<RwLock<HashMap<String, CacheRecordsModel>>>,
 
     operator: Arc<DefaultAsyncFileOperator>,
@@ -165,6 +165,7 @@ impl DefaultAsyncFileCacheManager {
         Ok(Self {
             base_path,
             channel,
+            pending_records: RwLock::new(HashMap::new()),
             records: Arc::new(RwLock::new(HashMap::from_iter(
                 records
                     .into_iter()
@@ -277,6 +278,40 @@ impl DefaultAsyncFileOperator {
 
 impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
     async fn cache(&self, tag: String, sentence: String, bytes: Bytes) -> Result<(), CacheError> {
+        let mut pending_records = self.pending_records.write();
+        let (permit, arc_semaphore) = if let Some(weak) = pending_records.get(&tag) {
+            match weak.upgrade() {
+                Some(arc) => {
+                    let acquire_fut = arc.clone().acquire_owned();
+                    drop(pending_records);
+                    let permit = timeout(Duration::from_secs(60), acquire_fut)
+                        .await?
+                        .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
+                    (permit, arc)
+                }
+                None => {
+                    let new_arc = Arc::new(Semaphore::new(1));
+                    pending_records.insert(tag.clone(), Arc::downgrade(&new_arc));
+                    let acquire_future = new_arc.clone().acquire_owned();
+                    drop(pending_records);
+                    let permit = timeout(Duration::from_secs(60), acquire_future)
+                        .await?
+                        .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
+                    (permit, new_arc)
+                }
+            }
+        } else {
+            let arc = Arc::new(Semaphore::new(1));
+            pending_records.insert(tag.clone(), Arc::downgrade(&arc));
+            let acquire_future = arc.clone().acquire_owned();
+            drop(pending_records);
+            let permit = acquire_future
+                .await
+                .map_err(|e| CacheError::ErrorForward(e.to_string()))?;
+            (permit, arc)
+        };
+        let _permit = permit;
+
         let mut records = self.records.write();
         if records.contains_key(&tag) {
             let record = records.remove(&tag).unwrap();
@@ -302,27 +337,37 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
                     Some(EnsureMode::SyncAll),
                 )
                 .await;
-            return match result {
+            let result = match result {
                 Ok(()) => match result {
                     Ok(()) => {
                         let active_model = record.clone().into_active_model();
-                        CacheService::insert_records(vec![active_model]).await?;
-                        let mut records = self.records.write();
-                        records.insert(tag, record);
-                        Ok(())
+                        let result = CacheService::insert_records(vec![active_model]).await;
+                        match result {
+                            Ok(_) => {
+                                let mut records = self.records.write();
+                                records.insert(tag.clone(), record);
+                                Ok(())
+                            }
+                            Err(err) => Err(CacheError::ErrorForward(err.to_string())),
+                        }
                     }
-                    Err(e) => {
-                        CacheService::remove_record_by_id(id).await?;
-                        Err(e)
-                    }
+                    Err(_) => CacheService::remove_record_by_id(id)
+                        .await
+                        .map_err(|e| CacheError::ErrorForward(e.to_string())),
                 },
-                Err(e) => {
-                    CacheService::remove_record_by_id(id).await?;
-                    Err(e)
-                }
+                Err(_) => CacheService::remove_record_by_id(id)
+                    .await
+                    .map_err(|e| CacheError::ErrorForward(e.to_string())),
             };
+
+            let mut pending = self.pending_records.write();
+            if Arc::strong_count(&arc_semaphore) <= 2 {
+                pending.remove(&tag);
+            }
+            return result;
         }
         drop(records);
+
         let channel_id = self.channel.id.clone();
         let uuid = Uuid::new_v4().to_string();
         let path = self.build_file_path(&uuid);
@@ -342,9 +387,26 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
             sentence: ActiveValue::Set(sentence),
             channel_id: ActiveValue::Set(channel_id),
         };
-        let record = CacheService::insert_record(record).await?;
+        let record = match CacheService::insert_record(record).await {
+            Ok(record) => {
+                record
+            }
+            Err(e) => {
+                let mut pending = self.pending_records.write();
+                if Arc::strong_count(&arc_semaphore) <= 2 {
+                    pending.remove(&tag);
+                }
+                return Err(CacheError::ErrorForward(e.to_string()));
+            }
+        };
+
         let mut records = self.records.write();
-        records.insert(tag, record);
+        records.insert(tag.clone(), record);
+
+        let mut pending = self.pending_records.write();
+        if Arc::strong_count(&arc_semaphore) <= 2 {
+            pending.remove(&tag);
+        }
         Ok(())
     }
 
