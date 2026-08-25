@@ -17,8 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
-use tokio::sync::{oneshot, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::sync::{Semaphore, oneshot};
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -59,6 +59,7 @@ pub struct DefaultAsyncFileOperator {
     queue: Arc<AsyncPriorityQueue<Arc<QueuedRequest>>>,
     stash: Arc<RwLock<HashMap<String, Weak<QueuedRequest>>>>,
     handle: Mutex<Option<JoinHandle<()>>>,
+    write_tasks: Arc<Mutex<JoinSet<()>>>,
     cancellation_token: CancellationToken,
 }
 
@@ -199,6 +200,7 @@ impl DefaultAsyncFileOperator {
             queue: Arc::new(AsyncPriorityQueue::with_capacity(128)),
             stash: Arc::new(RwLock::new(HashMap::with_capacity(128))),
             handle: Mutex::new(None),
+            write_tasks: Arc::new(Mutex::new(JoinSet::new())),
             cancellation_token: CancellationToken::new(),
         }
     }
@@ -218,6 +220,7 @@ impl DefaultAsyncFileOperator {
             .create(true)
             .append(bytes.write_mode == WriteMode::Append)
             .write(bytes.write_mode == WriteMode::Cover)
+            .truncate(bytes.write_mode == WriteMode::Cover)
             .open(&bytes.path)
             .await?;
         timeout(Duration::from_secs(60), file.write_all(&bytes.bytes)).await??;
@@ -241,10 +244,12 @@ impl DefaultAsyncFileOperator {
         let cloned_queue = self.queue.clone();
         let cloned_stash = self.stash.clone();
         let cloned_cancellation_token = self.cancellation_token.clone();
+        let cloned_write_tasks = self.write_tasks.clone();
         *self.handle.lock() = Some(self.tokio_runtime.spawn(async move {
             let queue = cloned_queue;
             let stash = cloned_stash;
             let cancellation_token = cloned_cancellation_token;
+            let write_tasks = cloned_write_tasks;
             let semaphore = Arc::new(Semaphore::new(16));
 
             cancellation_token
@@ -253,7 +258,10 @@ impl DefaultAsyncFileOperator {
                         let request = queue.pop().await;
                         let cloned_stash = stash.clone();
                         let cloned_semaphore = semaphore.clone();
-                        tokio::spawn(async move {
+
+                        let mut write_tasks = write_tasks.lock();
+                        while write_tasks.try_join_next().is_some() {}
+                        write_tasks.spawn(async move {
                             let _ = cloned_semaphore.acquire().await;
                             let _ = Self::write_file(&request).await;
                             cloned_stash.write().remove(&request.path);
@@ -273,6 +281,7 @@ impl DefaultAsyncFileOperator {
 
     fn dispose(&self) {
         self.cancellation_token.cancel();
+        self.write_tasks.lock().abort_all();
     }
 }
 
@@ -338,23 +347,17 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
                 )
                 .await;
             let result = match result {
-                Ok(()) => match result {
-                    Ok(()) => {
-                        let active_model = record.clone().into_active_model();
-                        let result = CacheService::insert_records(vec![active_model]).await;
-                        match result {
-                            Ok(_) => {
-                                let mut records = self.records.write();
-                                records.insert(tag.clone(), record);
-                                Ok(())
-                            }
-                            Err(err) => Err(CacheError::ErrorForward(err.to_string())),
+                Ok(()) => {
+                    let active_model = record.clone().into_active_model();
+                    match CacheService::insert_records(vec![active_model]).await {
+                        Ok(_) => {
+                            let mut records = self.records.write();
+                            records.insert(tag.clone(), record);
+                            Ok(())
                         }
+                        Err(err) => Err(CacheError::ErrorForward(err.to_string())),
                     }
-                    Err(_) => CacheService::remove_record_by_id(id)
-                        .await
-                        .map_err(|e| CacheError::ErrorForward(e.to_string())),
-                },
+                }
                 Err(_) => CacheService::remove_record_by_id(id)
                     .await
                     .map_err(|e| CacheError::ErrorForward(e.to_string())),
@@ -388,9 +391,7 @@ impl AsyncFileCacheManager for DefaultAsyncFileCacheManager {
             channel_id: ActiveValue::Set(channel_id),
         };
         let record = match CacheService::insert_record(record).await {
-            Ok(record) => {
-                record
-            }
+            Ok(record) => record,
             Err(e) => {
                 let mut pending = self.pending_records.write();
                 if Arc::strong_count(&arc_semaphore) <= 2 {
@@ -563,7 +564,7 @@ impl Drop for DefaultAsyncFileOperator {
 impl Ord for QueuedRequest {
     fn cmp(&self, other: &Self) -> Ordering {
         let p1 = self.priority.read();
-        let p2 = self.priority.read();
+        let p2 = other.priority.read();
         if *p1 != *p2 {
             return p1.cmp(&p2);
         }
