@@ -7,6 +7,13 @@ pub struct AsyncPriorityQueue<T: Ord> {
 }
 
 impl<T: Ord> AsyncPriorityQueue<T> {
+    pub fn unbounded() -> Self {
+        Self {
+            heap: Mutex::new(BinaryHeap::new()),
+            notifier: Notify::new(),
+        }
+    }
+    
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             heap: Mutex::new(BinaryHeap::with_capacity(capacity)),

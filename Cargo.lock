@@ -356,6 +356,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-ringbuf"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cc94fc6ae3cd8b20564bc47514146daf40d9c204852bba86499783c8747611e"
+dependencies = [
+ "futures-util",
+ "ringbuf 0.5.1",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -412,7 +422,7 @@ dependencies = [
  "crossbeam-channel",
  "dasp_sample",
  "num-traits",
- "ringbuf",
+ "ringbuf 0.4.8",
  "rubato",
  "tracing",
 ]
@@ -3032,6 +3042,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ringbuf"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a158e09ede21a14b172ca6cdd6208386c6ae2cb6acef58d774368ef8c450dfa7"
+dependencies = [
+ "crossbeam-utils",
+ "portable-atomic",
+ "portable-atomic-util",
+]
+
+[[package]]
 name = "rkv"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3899,6 +3920,7 @@ dependencies = [
  "aes",
  "android-media",
  "arrayvec",
+ "async-ringbuf",
  "async-trait",
  "audio-recorder-rs",
  "base64 0.23.0",
@@ -3922,6 +3944,7 @@ dependencies = [
  "realfft",
  "reqwest",
  "reqwest_cookie_store",
+ "ringbuf 0.5.1",
  "rkv",
  "rkyv 0.8.14",
  "rodio",

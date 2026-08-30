@@ -39,6 +39,7 @@ pub struct HttpResponse {
 pub struct HttpStreamResponse {
     pub status: u16,
     pub headers: Vec<(String, String)>,
+    pub content_length: Option<u64>,
     pub stream: BoxStream<'static, Result<Bytes, HttpClientError>>,
 }
 

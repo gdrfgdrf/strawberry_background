@@ -6,3 +6,4 @@ pub mod audio_models;
 mod error_convert;
 pub mod monitor_models;
 pub mod coordinator_models;
+pub mod downloader_models;

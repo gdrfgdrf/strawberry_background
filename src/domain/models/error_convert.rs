@@ -10,6 +10,7 @@ use crate::db::initializer::DatabaseError;
 use crate::domain::models::audio_models::AudioError;
 use crate::domain::models::cookie_models::CookieError;
 use crate::domain::models::coordinator_models::{CategorizerError, CoordinatorError, DiscoverError, QueuerError, RegistryError};
+use crate::domain::models::downloader_models::DownloaderError;
 use crate::domain::models::file_cache_models::CacheError;
 use crate::domain::models::http_models::HttpClientError;
 use crate::domain::models::storage_models::StorageError;
@@ -144,6 +145,12 @@ impl From<DatabaseError> for CookieError {
 impl From<CookieError> for HttpClientError {
     fn from(value: CookieError) -> Self {
         HttpClientError::ErrorForward(value.to_string())
+    }
+}
+
+impl From<Elapsed> for DownloaderError {
+    fn from(value: Elapsed) -> Self {
+        Self::ErrorForward(value.to_string())
     }
 }
 

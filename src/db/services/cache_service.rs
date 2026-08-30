@@ -13,7 +13,7 @@ pub struct CacheService {}
 
 impl CacheService {
     pub async fn find_channel_by_id(id: i64) -> Result<Option<CacheChannelsModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -28,7 +28,7 @@ impl CacheService {
     pub async fn find_channel_by_name(
         name: String,
     ) -> Result<Option<CacheChannelsModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -43,7 +43,7 @@ impl CacheService {
     pub async fn find_channels_by_names(
         names: Vec<String>,
     ) -> Result<Option<Vec<Option<CacheChannelsModel>>>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -68,7 +68,7 @@ impl CacheService {
     pub async fn find_records_by_channel_id(
         id: i64,
     ) -> Result<Option<Vec<CacheRecordsModel>>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -88,7 +88,7 @@ impl CacheService {
     pub async fn insert_channel(
         active_model: CacheChannelsActiveModel,
     ) -> Result<(), DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -108,7 +108,7 @@ impl CacheService {
     }
 
     pub async fn insert_channels(active_models: Vec<CacheChannelsActiveModel>) -> Result<(), DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -130,7 +130,7 @@ impl CacheService {
     pub async fn insert_record(
         active_model: CacheRecordsActiveModel,
     ) -> Result<CacheRecordsModel, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -144,7 +144,7 @@ impl CacheService {
     pub async fn insert_records(
         active_models: Vec<CacheRecordsActiveModel>,
     ) -> Result<(), DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -164,7 +164,7 @@ impl CacheService {
     }
 
     pub async fn remove_record_by_id(id: i64) -> Result<(), DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -179,7 +179,7 @@ impl CacheService {
     }
 
     pub async fn remove_records_by_ids(ids: Vec<i64>) -> Result<(), DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }

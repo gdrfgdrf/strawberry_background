@@ -45,7 +45,7 @@ impl From<DbErr> for DatabaseError {
 }
 
 lazy_static! {
-    pub static ref DB: RwLock<Option<DatabaseConnection>> = RwLock::new(None);
+    pub static ref DB: tokio::sync::RwLock<Option<DatabaseConnection>> = tokio::sync::RwLock::new(None);
 }
 
 pub async fn initialize_db(db_path: &str) -> Result<DatabaseConnection, DatabaseError> {
@@ -66,7 +66,7 @@ pub async fn initialize_db(db_path: &str) -> Result<DatabaseConnection, Database
 }
 
 pub async fn initialize_strawberry_background_db(db_path: &str) -> Result<(), DatabaseError> {
-    let db = DB.read();
+    let db = DB.read().await;
     if db.is_some() {
         return Ok(());
     }
@@ -74,7 +74,7 @@ pub async fn initialize_strawberry_background_db(db_path: &str) -> Result<(), Da
 
     let db = initialize_db(db_path).await?;
     Migrator::up(&db, None).await?;
-    *DB.write() = Some(db);
+    *DB.write().await = Some(db);
 
     Ok(())
 }

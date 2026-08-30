@@ -262,7 +262,7 @@ impl DefaultAsyncFileOperator {
                         let mut write_tasks = write_tasks.lock();
                         while write_tasks.try_join_next().is_some() {}
                         write_tasks.spawn(async move {
-                            let _ = cloned_semaphore.acquire().await;
+                            let _permit = cloned_semaphore.acquire().await;
                             let _ = Self::write_file(&request).await;
                             cloned_stash.write().remove(&request.path);
 

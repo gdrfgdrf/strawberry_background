@@ -9,3 +9,4 @@ pub mod fft_visualiser;
 pub mod fft_executor;
 pub mod lru_cache;
 pub mod async_priority_queue;
+pub mod speed_analyzer;

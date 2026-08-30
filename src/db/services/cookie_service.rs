@@ -13,7 +13,7 @@ pub struct CookieService {}
 
 impl CookieService {
     pub async fn find_key_by_key_id(key_id: i64) -> Result<Option<CookieKeysModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -22,7 +22,7 @@ impl CookieService {
     }
 
     pub async fn find_value_by_key_id(key_id: i64) -> Result<Option<CookiesModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -33,7 +33,7 @@ impl CookieService {
     pub async fn find_value_by_value_id(
         value_id: i64,
     ) -> Result<Option<CookiesModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -44,7 +44,7 @@ impl CookieService {
     pub async fn find_values_by_key_ids(
         key_ids: Vec<i64>,
     ) -> Result<Vec<Option<CookiesModel>>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -69,7 +69,7 @@ impl CookieService {
     pub async fn find_keys_by_domain(
         domain: String,
     ) -> Result<Vec<CookieKeysModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -81,7 +81,7 @@ impl CookieService {
     }
 
     pub async fn find_keys_by_path(path: String) -> Result<Vec<CookieKeysModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -93,7 +93,7 @@ impl CookieService {
     }
 
     pub async fn find_keys_by_name(name: String) -> Result<Vec<CookieKeysModel>, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -142,7 +142,7 @@ impl CookieService {
         key: CookieKeysActiveModel,
         mut value: CookiesActiveModel,
     ) -> Result<(), DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -181,7 +181,7 @@ impl CookieService {
     }
 
     pub async fn remove_key_by_key_id(key_id: i64) -> Result<bool, DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }
@@ -196,7 +196,7 @@ impl CookieService {
     }
 
     pub async fn clear_all() -> Result<(), DatabaseError> {
-        let db = DB.read();
+        let db = DB.read().await;
         if db.is_none() {
             return Err(DatabaseError::NotInitialized);
         }

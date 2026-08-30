@@ -420,6 +420,7 @@ impl HttpClient for ReqwestBackend {
             return Ok(HttpStreamResponse {
                 status,
                 headers,
+                content_length,
                 stream,
             });
         }
@@ -428,6 +429,7 @@ impl HttpClient for ReqwestBackend {
         Ok(HttpStreamResponse {
             status,
             headers,
+            content_length,
             stream,
         })
     }
