@@ -16,3 +16,8 @@ pub use super::cookies::Entity as Cookies;
 pub use super::cookies::Model as CookiesModel;
 pub use super::cookies::ActiveModel as CookiesActiveModel;
 pub use super::cookies::Column as CookiesColumn;
+
+pub use super::downloader_records::Entity as DownloaderRecords;
+pub use super::downloader_records::Model as DownloaderRecordsModel;
+pub use super::downloader_records::ActiveModel as DownloaderRecordsActiveModel;
+pub use super::downloader_records::Column as DownloaderRecordsColumn;

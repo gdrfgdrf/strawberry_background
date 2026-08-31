@@ -1,3 +1,4 @@
+use crate::db::models::downloader_records::DownloaderPriority;
 use std::cmp::Ordering;
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -11,16 +12,21 @@ pub enum DownloaderError {
 
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Priority {
     Normal,
     Privileged,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum RequestStatus {
     Enqueued,
     Running,
+    Paused,
+    Resumed,
+    WaitForRetry {
+        retry_at: u64
+    },
     Canceled,
     Finished,
     Error {
@@ -34,17 +40,22 @@ pub struct DownloadRequest {
     pub path: String,
     pub priority: Arc<RwLock<Priority>>,
     pub create_time: u64,
+    pub channel_id: u32,
+    pub resume_from: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Progress {
     pub length: u64,
     pub expected_length: u64,
     pub speed: f32,
 }
 
+#[derive(Debug)]
 pub struct RequestSnapshot {
     pub progress: Progress,
-    pub status: RequestStatus
+    pub status: RequestStatus,
+    pub retried_count: u32,
 }
 
 impl Priority {
@@ -54,6 +65,20 @@ impl Priority {
             Priority::Privileged => 0,
         }
     }
+
+    pub fn as_db_priority(&self) -> DownloaderPriority {
+        match self {
+            Priority::Normal => DownloaderPriority::Normal,
+            Priority::Privileged => DownloaderPriority::Privileged,
+        }
+    }
+
+    pub fn from_db_priority(value: DownloaderPriority) -> Self {
+        match value {
+            DownloaderPriority::Normal => Priority::Normal,
+            DownloaderPriority::Privileged => Priority::Privileged,
+        }
+    }
 }
 
 impl RequestStatus {
@@ -61,6 +86,9 @@ impl RequestStatus {
         match self {
             RequestStatus::Enqueued => false,
             RequestStatus::Running => false,
+            RequestStatus::Paused => false,
+            RequestStatus::Resumed => false,
+            RequestStatus::WaitForRetry { .. } => false,
             RequestStatus::Canceled => true,
             RequestStatus::Finished => true,
             RequestStatus::Error { .. } => true
@@ -82,7 +110,8 @@ impl Default for RequestSnapshot {
     fn default() -> Self {
         RequestSnapshot {
             progress: Progress::default(),
-            status: RequestStatus::Enqueued
+            status: RequestStatus::Enqueued,
+            retried_count: 0,
         }
     }
 }

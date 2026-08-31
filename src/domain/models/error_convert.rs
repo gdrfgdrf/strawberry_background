@@ -154,6 +154,12 @@ impl From<Elapsed> for DownloaderError {
     }
 }
 
+impl From<DatabaseError> for DownloaderError {
+    fn from(value: DatabaseError) -> Self {
+        Self::ErrorForward(value.to_string())
+    }
+}
+
 #[cfg(target_os = "android")]
 impl From<MicError> for AudioError {
     fn from(value: MicError) -> Self {

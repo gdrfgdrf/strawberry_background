@@ -1,7 +1,7 @@
-use std::time::SystemTime;
+use std::time::Instant;
 
 pub struct SpeedAnalyzer {
-    start_time: Option<u128>,
+    start_time: Option<Instant>,
     pub total: u64,
 }
 
@@ -14,27 +14,24 @@ impl SpeedAnalyzer {
     }
 
     pub fn start(&mut self) {
-        self.start_time = Some(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_micros(),
-        );
+        self.start_time = Some(Instant::now());
     }
 
     pub fn add(&mut self, delta: u64) {
-        self.total += delta;
+        self.total = self.total.saturating_add(delta);
     }
 
     pub fn speed(&self) -> f32 {
-        if let Some(start_time) = self.start_time {
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_micros();
-            let time_delta = (now - start_time) / 1000000;
-            return (self.total as f32) / (time_delta as f32);
+        match self.start_time {
+            Some(start) => {
+                let elapsed_secs = start.elapsed().as_secs_f32();
+                if elapsed_secs <= 0.0 {
+                    0.0
+                } else {
+                    self.total as f32 / elapsed_secs
+                }
+            }
+            None => 0.0,
         }
-        0.0
     }
 }

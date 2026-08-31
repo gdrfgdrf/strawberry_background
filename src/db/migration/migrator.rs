@@ -1,6 +1,7 @@
 use crate::db::migration::{
     m20260807_154717_create_cache_channels_table, m20260807_154726_create_cache_records_table,
     m20260814_070046_create_cookie_keys_table, m20260814_070053_create_cookies_table,
+    m20260831_120000_create_downloader_records_table,
 };
 use async_trait::async_trait;
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
@@ -15,6 +16,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260807_154726_create_cache_records_table::Migration),
             Box::new(m20260814_070046_create_cookie_keys_table::Migration),
             Box::new(m20260814_070053_create_cookies_table::Migration),
+            Box::new(m20260831_120000_create_downloader_records_table::Migration),
         ]
     }
 }
