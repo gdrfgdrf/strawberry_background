@@ -17,5 +17,10 @@ pub trait Downloader {
         channel_id: u32,
         request: DownloadRequest,
     ) -> Result<(Arc<Output>, CancellationToken), DownloaderError>;
+    async fn submit_batch(
+        &self,
+        channel_id: u32,
+        requests: Vec<DownloadRequest>,
+    ) -> Result<Vec<(Arc<Output>, CancellationToken)>, DownloaderError>;
     async fn recover(&self) -> Result<Vec<RecoveredDownload>, DownloaderError>;
 }

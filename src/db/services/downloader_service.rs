@@ -69,6 +69,62 @@ impl DownloaderService {
         Ok(())
     }
 
+    pub async fn upsert_batch(records: Vec<NewDownloaderRecord>) -> Result<(), DatabaseError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let db = DB.read().await;
+        if db.is_none() {
+            return Err(DatabaseError::NotInitialized);
+        }
+        let db = db.as_ref().unwrap();
+        let now = Utc::now().fixed_offset();
+
+        let active_models: Vec<DownloaderRecordsActiveModel> = records
+            .into_iter()
+            .map(|record| DownloaderRecordsActiveModel {
+                id: ActiveValue::NotSet,
+                request_id: ActiveValue::Set(record.request_id),
+                channel_id: ActiveValue::Set(record.channel_id),
+                url: ActiveValue::Set(record.url),
+                path: ActiveValue::Set(record.path),
+                priority: ActiveValue::Set(record.priority),
+                downloaded: ActiveValue::Set(record.downloaded),
+                expected_length: ActiveValue::Set(None),
+                status: ActiveValue::Set(record.status),
+                retried_count: ActiveValue::Set(0),
+                error_message: ActiveValue::Set(None),
+                created_at: ActiveValue::Set(now),
+                updated_at: ActiveValue::Set(now),
+            })
+            .collect();
+
+        let transaction = db.begin().await?;
+        DownloaderRecords::insert_many(active_models)
+            .on_conflict(
+                OnConflict::column(DownloaderRecordsColumn::RequestId)
+                    .update_columns([
+                        DownloaderRecordsColumn::ChannelId,
+                        DownloaderRecordsColumn::Url,
+                        DownloaderRecordsColumn::Path,
+                        DownloaderRecordsColumn::Priority,
+                        DownloaderRecordsColumn::Downloaded,
+                        DownloaderRecordsColumn::ExpectedLength,
+                        DownloaderRecordsColumn::Status,
+                        DownloaderRecordsColumn::RetriedCount,
+                        DownloaderRecordsColumn::ErrorMessage,
+                        DownloaderRecordsColumn::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec_without_returning(&transaction)
+            .await?;
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     pub async fn update_progress(
         request_id: &str,
         downloaded: i64,
@@ -91,6 +147,30 @@ impl DownloaderService {
         let mut active_model: DownloaderRecordsActiveModel = existing.into();
         active_model.downloaded = ActiveValue::Set(downloaded);
         active_model.expected_length = ActiveValue::Set(expected_length);
+        active_model.updated_at = ActiveValue::Set(Utc::now().fixed_offset());
+        active_model.update(db).await?;
+
+        Ok(())
+    }
+
+    pub async fn update_meta(request_id: &str, url: &str, path: &str) -> Result<(), DatabaseError> {
+        let db = DB.read().await;
+        if db.is_none() {
+            return Err(DatabaseError::NotInitialized);
+        }
+        let db = db.as_ref().unwrap();
+
+        let existing = DownloaderRecords::find()
+            .filter(DownloaderRecordsColumn::RequestId.eq(request_id))
+            .one(db)
+            .await?;
+        let Some(existing) = existing else {
+            return Ok(());
+        };
+
+        let mut active_model: DownloaderRecordsActiveModel = existing.into();
+        active_model.url = ActiveValue::Set(url.to_string());
+        active_model.path = ActiveValue::Set(path.to_string());
         active_model.updated_at = ActiveValue::Set(Utc::now().fixed_offset());
         active_model.update(db).await?;
 

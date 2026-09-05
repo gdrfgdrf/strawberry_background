@@ -1,15 +1,16 @@
 use crate::db::models::downloader_records::DownloaderPriority;
-use std::cmp::Ordering;
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::cmp::Ordering;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloaderError {
     #[error("Error Forward: {0}")]
     ErrorForward(String),
     #[error("Channel Not Exists")]
-    ChannelNotExists
-
+    ChannelNotExists,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -18,26 +19,61 @@ pub enum Priority {
     Privileged,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum RequestStatus {
     Enqueued,
     Running,
     Paused,
     Resumed,
-    WaitForRetry {
-        retry_at: u64
-    },
+    WaitForRetry { retry_at: u64 },
     Canceled,
     Finished,
-    Error {
-        message: String
-    },
+    Error { message: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedMeta {
+    pub url: String,
+    pub path: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MetaError {
+    #[error("{0}")]
+    Retryable(String),
+    #[error("{0}")]
+    Fatal(String),
+}
+
+pub trait MetaProvider: Send + Sync {
+    fn resolve(&self) -> Pin<Box<dyn Future<Output = Result<ResolvedMeta, MetaError>> + Send>>;
+}
+
+#[derive(Clone)]
+pub enum RequestSource {
+    Prepared { url: String, path: String },
+    Deferred(Arc<dyn MetaProvider>),
+}
+
+impl RequestSource {
+    pub fn known_url(&self) -> String {
+        match self {
+            RequestSource::Prepared { url, .. } => url.clone(),
+            RequestSource::Deferred(_) => String::new(),
+        }
+    }
+
+    pub fn known_path(&self) -> String {
+        match self {
+            RequestSource::Prepared { path, .. } => path.clone(),
+            RequestSource::Deferred(_) => String::new(),
+        }
+    }
 }
 
 pub struct DownloadRequest {
     pub id: String,
-    pub url: String,
-    pub path: String,
+    pub source: RequestSource,
     pub priority: Arc<RwLock<Priority>>,
     pub create_time: u64,
     pub channel_id: u32,
@@ -51,7 +87,7 @@ pub struct Progress {
     pub speed: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RequestSnapshot {
     pub progress: Progress,
     pub status: RequestStatus,
@@ -91,7 +127,7 @@ impl RequestStatus {
             RequestStatus::WaitForRetry { .. } => false,
             RequestStatus::Canceled => true,
             RequestStatus::Finished => true,
-            RequestStatus::Error { .. } => true
+            RequestStatus::Error { .. } => true,
         }
     }
 }
@@ -101,7 +137,7 @@ impl Default for Progress {
         Self {
             length: 0,
             expected_length: u64::MAX,
-            speed: 0.0
+            speed: 0.0,
         }
     }
 }

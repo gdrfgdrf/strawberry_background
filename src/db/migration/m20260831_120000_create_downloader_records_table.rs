@@ -29,11 +29,6 @@ impl MigrationTrait for Migration {
                     .col(text_null("error_message"))
                     .col(timestamp_with_time_zone("created_at"))
                     .col(timestamp_with_time_zone("updated_at"))
-                    .index(
-                        Index::create()
-                            .name("downloader_records_status")
-                            .col("status"),
-                    )
                     .to_owned(),
             )
             .await

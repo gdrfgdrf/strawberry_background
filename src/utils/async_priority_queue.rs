@@ -27,6 +27,19 @@ impl<T: Ord> AsyncPriorityQueue<T> {
         self.notifier.notify_one();
     }
 
+    pub async fn push_many(&self, items: impl IntoIterator<Item = T>) {
+        let mut heap = self.heap.lock().await;
+        let mut pushed_any = false;
+        for item in items {
+            heap.push(item);
+            pushed_any = true;
+        }
+        drop(heap);
+        if pushed_any {
+            self.notifier.notify_one();
+        }
+    }
+
     pub async fn pop(&self) -> T {
         loop {
             let mut heap = self.heap.lock().await;

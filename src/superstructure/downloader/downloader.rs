@@ -2,7 +2,8 @@ use crate::db::models::downloader_records::DownloaderStatus;
 use crate::db::models::preclude::DownloaderRecordsModel;
 use crate::db::services::downloader_service::{DownloaderService, NewDownloaderRecord};
 use crate::domain::models::downloader_models::{
-    DownloadRequest, DownloaderError, Priority, Progress, RequestSnapshot, RequestStatus,
+    DownloadRequest, DownloaderError, MetaError, Priority, Progress, RequestSnapshot,
+    RequestSource, RequestStatus, ResolvedMeta,
 };
 use crate::domain::models::http_models::{HttpEndpoint, HttpMethod};
 use crate::domain::traits::downloader_traits::{Downloader, RecoveredDownload};
@@ -23,13 +24,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
-use tokio::sync::{Notify, Semaphore, watch};
+use tokio::sync::{Notify, OnceCell, Semaphore, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 const MAX_CONCURRENT_DOWNLOADS: usize = 6;
-const MAX_RETRY_ATTEMPTS: u32 = 5;
+const MAX_RETRY_ATTEMPTS: u32 = 3;
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(3600);
@@ -48,6 +49,7 @@ pub struct Output {
     pub snapshot_sender: watch::Sender<RequestSnapshot>,
     run_signal: watch::Sender<RunSignal>,
     retry_notify: Notify,
+    resolved_path: Mutex<Option<String>>,
 }
 
 impl Output {
@@ -65,7 +67,16 @@ impl Output {
             snapshot_sender: watch::channel(RequestSnapshot::default()).0,
             run_signal: watch::channel(initial_signal).0,
             retry_notify: Notify::new(),
+            resolved_path: Mutex::new(None),
         }
+    }
+
+    pub fn resolved_path(&self) -> Option<String> {
+        self.resolved_path.lock().clone()
+    }
+
+    fn set_resolved_path(&self, path: String) {
+        *self.resolved_path.lock() = Some(path);
     }
 
     pub fn subscribe(&self) -> watch::Receiver<RequestSnapshot> {
@@ -206,6 +217,15 @@ fn persist_status(
     });
 }
 
+fn persist_meta(request_id: &str, url: &str, path: &str) {
+    let request_id = request_id.to_string();
+    let url = url.to_string();
+    let path = path.to_string();
+    tokio::spawn(async move {
+        let _ = DownloaderService::update_meta(&request_id, &url, &path).await;
+    });
+}
+
 fn persist_removal(request_id: &str) {
     let request_id = request_id.to_string();
     tokio::spawn(async move {
@@ -286,7 +306,6 @@ impl DownloaderChannel {
 
         *self.handle.lock() = Some(self.runtime.spawn(async move {
             let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DOWNLOADS));
-
             loop {
                 let wrapped = queue.pop().await;
                 let semaphore = semaphore.clone();
@@ -307,8 +326,8 @@ impl DownloaderChannel {
         let new_record = NewDownloaderRecord {
             request_id: request.id.clone(),
             channel_id: request.channel_id as i64,
-            url: request.url.clone(),
-            path: request.path.clone(),
+            url: request.source.known_url(),
+            path: request.source.known_path(),
             priority: request.priority.read().as_db_priority(),
             downloaded: request.resume_from as i64,
             status: DownloaderStatus::Enqueued,
@@ -319,6 +338,46 @@ impl DownloaderChannel {
         let wrapped = WrappedRequest::new(request, output.clone(), cancellation_token.clone());
         timeout(ENQUEUE_TIMEOUT, self.queue.push(wrapped)).await?;
         Ok((output, cancellation_token))
+    }
+
+    pub async fn submit_batch(
+        &self,
+        requests: Vec<DownloadRequest>,
+    ) -> Result<Vec<(Arc<Output>, CancellationToken)>, DownloaderError> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let new_records = requests
+            .iter()
+            .map(|request| NewDownloaderRecord {
+                request_id: request.id.clone(),
+                channel_id: request.channel_id as i64,
+                url: request.source.known_url(),
+                path: request.source.known_path(),
+                priority: request.priority.read().as_db_priority(),
+                downloaded: request.resume_from as i64,
+                status: DownloaderStatus::Enqueued,
+            })
+            .collect();
+        let _ = DownloaderService::upsert_batch(new_records).await;
+
+        let mut results = Vec::with_capacity(requests.len());
+        let mut wrapped_requests = Vec::with_capacity(requests.len());
+        for request in requests {
+            let output = Arc::new(Output::new());
+            let cancellation_token = CancellationToken::new();
+            wrapped_requests.push(WrappedRequest::new(
+                request,
+                output.clone(),
+                cancellation_token.clone(),
+            ));
+            results.push((output, cancellation_token));
+        }
+
+        timeout(ENQUEUE_TIMEOUT, self.queue.push_many(wrapped_requests)).await?;
+
+        Ok(results)
     }
 
     pub async fn submit_recovered(
@@ -335,8 +394,10 @@ impl DownloaderChannel {
 
         let request = DownloadRequest {
             id: record.request_id,
-            url: record.url,
-            path: record.path,
+            source: RequestSource::Prepared {
+                url: record.url,
+                path: record.path,
+            },
             priority: Arc::new(RwLock::new(Priority::from_db_priority(record.priority))),
             create_time,
             channel_id: record.channel_id as u32,
@@ -394,6 +455,21 @@ impl Downloader for HttpDownloader {
         channel.submit(request).await
     }
 
+    async fn submit_batch(
+        &self,
+        channel_id: u32,
+        mut requests: Vec<DownloadRequest>,
+    ) -> Result<Vec<(Arc<Output>, CancellationToken)>, DownloaderError> {
+        let channel = self.channels.get(&channel_id).map(|entry| entry.clone());
+        let Some(channel) = channel else {
+            return Err(DownloaderError::ChannelNotExists);
+        };
+        for request in requests.iter_mut() {
+            request.channel_id = channel_id;
+        }
+        channel.submit_batch(requests).await
+    }
+
     async fn recover(&self) -> Result<Vec<RecoveredDownload>, DownloaderError> {
         let records = DownloaderService::find_resumable().await?;
 
@@ -401,6 +477,18 @@ impl Downloader for HttpDownloader {
         for record in records {
             let channel_id = record.channel_id as u32;
             let request_id = record.request_id.clone();
+
+            if record.url.is_empty() {
+                persist_status(
+                    &request_id,
+                    DownloaderStatus::Error,
+                    record.downloaded as u64,
+                    record.retried_count.max(0) as u32,
+                    Some("url is empty".to_string()),
+                );
+                continue;
+            }
+
             let channel = self.channels.get(&channel_id).map(|entry| entry.clone());
             let Some(channel) = channel else {
                 continue;
@@ -467,8 +555,16 @@ async fn run_request(
         initial_retried_count,
     } = wrapped;
     let state = AttemptState::new(request.resume_from, initial_retried_count);
+    let meta_cache = OnceCell::new();
 
-    let attempt = attempt_download(&request, &output, &semaphore, &service_runtime, &state);
+    let attempt = attempt_download(
+        &request,
+        &output,
+        &semaphore,
+        &service_runtime,
+        &state,
+        &meta_cache,
+    );
     if cancellation_token
         .run_until_cancelled(attempt)
         .await
@@ -489,6 +585,7 @@ async fn attempt_download(
     semaphore: &Arc<Semaphore>,
     service_runtime: &Arc<ServiceRuntime>,
     state: &AttemptState,
+    meta_cache: &OnceCell<ResolvedMeta>,
 ) {
     let mut run_signal_receiver = output.run_signal.subscribe();
 
@@ -527,16 +624,47 @@ async fn attempt_download(
             Ok(permit) => permit,
             Err(_) => return,
         };
-        persist_status(
-            &request.id,
-            DownloaderStatus::Running,
-            state.downloaded(),
-            state.retried_count(),
-            None,
-        );
 
-        let outcome =
-            run_single_attempt(request, output, service_runtime, state, &mut run_signal_receiver).await;
+        let outcome = match resolve_meta(&request.source, meta_cache, &request.id).await {
+            Ok(resolved) => {
+                output.set_resolved_path(resolved.path.clone());
+                persist_status(
+                    &request.id,
+                    DownloaderStatus::Running,
+                    state.downloaded(),
+                    state.retried_count(),
+                    None,
+                );
+
+                run_single_attempt(
+                    request,
+                    &resolved,
+                    output,
+                    service_runtime,
+                    state,
+                    &mut run_signal_receiver,
+                )
+                .await
+            }
+            Err(MetaError::Fatal(message)) => {
+                output.emit(
+                    RequestStatus::Error {
+                        message: message.clone(),
+                    },
+                    state.progress(),
+                    state.retried_count(),
+                );
+                persist_status(
+                    &request.id,
+                    DownloaderStatus::Error,
+                    state.downloaded(),
+                    state.retried_count(),
+                    Some(message),
+                );
+                return;
+            }
+            Err(MetaError::Retryable(message)) => AttemptOutcome::Failed(message),
+        };
         drop(permit);
 
         match outcome {
@@ -597,8 +725,31 @@ async fn attempt_download(
     }
 }
 
+async fn resolve_meta(
+    source: &RequestSource,
+    cache: &OnceCell<ResolvedMeta>,
+    request_id: &str,
+) -> Result<ResolvedMeta, MetaError> {
+    let resolved = cache
+        .get_or_try_init(|| async {
+            let resolved = match source {
+                RequestSource::Prepared { url, path } => ResolvedMeta {
+                    url: url.clone(),
+                    path: path.clone(),
+                },
+                RequestSource::Deferred(provider) => provider.resolve().await?,
+            };
+            persist_meta(request_id, &resolved.url, &resolved.path);
+            Ok(resolved)
+        })
+        .await?;
+
+    Ok(resolved.clone())
+}
+
 async fn run_single_attempt(
     request: &DownloadRequest,
+    resolved: &ResolvedMeta,
     output: &Arc<Output>,
     service_runtime: &Arc<ServiceRuntime>,
     state: &AttemptState,
@@ -613,7 +764,7 @@ async fn run_single_attempt(
 
     let endpoint = HttpEndpoint {
         path: String::new(),
-        domain: request.url.clone(),
+        domain: resolved.url.clone(),
         body: None,
         timeout: HTTP_REQUEST_TIMEOUT,
         headers,
@@ -638,7 +789,7 @@ async fn run_single_attempt(
         state.reset_downloaded();
     }
 
-    let mut file = match StreamFileWriter::open(&request.path, start_offset).await {
+    let mut file = match StreamFileWriter::open(&resolved.path, start_offset).await {
         Ok(file) => file,
         Err(err) => return AttemptOutcome::Failed(format!("failed to open file: {err}")),
     };
